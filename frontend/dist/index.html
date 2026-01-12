@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DMXX - DMX Lighting Controller</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <script>
+      // Apply cached theme immediately to prevent flash of unstyled content
+      (function() {
+        try {
+          var cached = localStorage.getItem('dmxx_theme_cache');
+          if (cached) {
+            var theme = JSON.parse(cached);
+            var colors = theme.colors;
+            var root = document.documentElement;
+            var mapping = {
+              bgPrimary: '--bg-primary',
+              bgSecondary: '--bg-secondary',
+              bgTertiary: '--bg-tertiary',
+              textPrimary: '--text-primary',
+              textSecondary: '--text-secondary',
+              accent: '--accent',
+              accentHover: '--accent-hover',
+              success: '--success',
+              warning: '--warning',
+              error: '--error',
+              border: '--border',
+              faderBg: '--fader-bg',
+              faderFill: '--fader-fill',
+              indicatorRemote: '--indicator-remote',
+              indicatorLocal: '--indicator-local'
+            };
+            Object.keys(mapping).forEach(function(key) {
+              if (colors[key]) {
+                root.style.setProperty(mapping[key], colors[key]);
+              }
+            });
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-BCRoANWK.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CthYOaQi.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
