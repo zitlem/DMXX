@@ -27,6 +27,7 @@
       <table class="data-table">
         <thead>
           <tr>
+            <th class="drag-col"></th>
             <th>Label</th>
             <th>Fixture</th>
             <th>Universe</th>
@@ -34,23 +35,48 @@
             <th>Actions</th>
           </tr>
         </thead>
-        <tbody>
-          <tr v-for="patch in filteredPatches" :key="patch.id">
-            <td>{{ patch.label || '-' }}</td>
-            <td>{{ patch.fixture_name }}</td>
-            <td>{{ patch.universe_label }}</td>
-            <td>{{ patch.start_channel }}-{{ patch.end_channel }}</td>
-            <td class="action-buttons">
-              <button class="btn btn-small btn-secondary" @click="editPatch(patch)">Edit</button>
-              <button class="btn btn-small btn-danger" @click="confirmDeletePatch(patch)">Delete</button>
-            </td>
-          </tr>
-          <tr v-if="filteredPatches.length === 0">
-            <td colspan="5" style="text-align: center; color: var(--text-secondary);">
-              No patches configured
-            </td>
-          </tr>
-        </tbody>
+        <draggable
+          v-model="dmxStore.patches"
+          tag="tbody"
+          item-key="id"
+          :animation="200"
+          ghost-class="patch-row-ghost"
+          drag-class="patch-row-dragging"
+          handle=".drag-handle"
+          :delay="150"
+          :delay-on-touch-only="true"
+          :touch-start-threshold="5"
+          filter=".action-buttons"
+          :prevent-on-filter="false"
+          @end="onDragEnd"
+        >
+          <template #item="{ element: patch }">
+            <tr v-show="filterUniverse === null || patch.universe_id === filterUniverse">
+              <td class="drag-handle">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="9" cy="6" r="2"/><circle cx="15" cy="6" r="2"/>
+                  <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
+                  <circle cx="9" cy="18" r="2"/><circle cx="15" cy="18" r="2"/>
+                </svg>
+              </td>
+              <td>{{ patch.label || '-' }}</td>
+              <td>{{ patch.fixture_name }}</td>
+              <td>{{ patch.universe_label }}</td>
+              <td>{{ patch.start_channel }}-{{ patch.end_channel }}</td>
+              <td class="action-buttons">
+                <button class="btn btn-small btn-secondary" @click="editPatch(patch)">Edit</button>
+                <button class="btn btn-small btn-danger" @click="confirmDeletePatch(patch)">Delete</button>
+              </td>
+            </tr>
+          </template>
+          <template #footer>
+            <tr v-if="filteredPatches.length === 0">
+              <td colspan="6" style="text-align: center; color: var(--text-secondary);">
+                No patches configured
+              </td>
+            </tr>
+          </template>
+        </draggable>
       </table>
     </div>
 
@@ -132,6 +158,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import draggable from 'vuedraggable'
 import { useDmxStore } from '../stores/dmx.js'
 import { useAuthStore } from '../stores/auth.js'
 
@@ -196,6 +223,29 @@ onMounted(async () => {
     dmxStore.loadFixtures()
   ])
 })
+
+async function onDragEnd(event) {
+  // Only process if position actually changed
+  if (event.oldIndex === event.newIndex) return
+
+  // Extract ordered IDs from the patches array
+  const orderedIds = dmxStore.patches.map(p => p.id)
+
+  try {
+    await fetch('/api/patch/reorder', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authStore.getAuthHeaders()
+      },
+      body: JSON.stringify({ patch_ids: orderedIds })
+    })
+  } catch (e) {
+    console.error('Failed to reorder patches:', e)
+    // Reload patches to restore server state on error
+    await dmxStore.loadPatches()
+  }
+}
 
 function editPatch(patch) {
   editingPatch.value = patch
@@ -266,10 +316,55 @@ async function deletePatch() {
 </script>
 
 <style scoped>
+/* Drag-and-drop styles */
+.patch-row-ghost {
+  opacity: 0.4;
+  background: var(--bg-secondary);
+}
+
+.patch-row-dragging {
+  opacity: 0.9;
+  background: var(--bg-tertiary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Drag handle column */
+.drag-col {
+  width: 36px;
+}
+
+.drag-handle {
+  width: 36px;
+  padding: 8px !important;
+  cursor: grab;
+  color: var(--text-secondary);
+  text-align: center;
+  touch-action: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle svg {
+  opacity: 0.4;
+  transition: opacity 0.2s;
+}
+
+.drag-handle:hover svg,
+tr:hover .drag-handle svg {
+  opacity: 0.8;
+}
+
 .action-buttons {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  touch-action: manipulation;
+}
+
+.action-buttons .btn {
+  touch-action: manipulation;
 }
 
 .overlap-warning {

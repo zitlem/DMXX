@@ -33,6 +33,9 @@ from .api.io import router as io_router
 from .api.mapping import router as mapping_router
 from .api.groups import router as groups_router
 from .api.remote import router as remote_router
+from .api.help import router as help_router
+from .api.monitor import router as monitor_router
+from .api.midi import router as midi_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,6 +47,45 @@ def dmx_callback(event_type: str, data: dict):
         "type": event_type,
         "data": data
     }))
+
+
+async def _recall_scene_from_midi(scene_id: int, velocity: int):
+    """Recall a scene triggered by MIDI note.
+
+    Args:
+        scene_id: Scene ID to recall
+        velocity: MIDI velocity (0-127), can be used for fade time
+    """
+    from .database import get_db, Scene
+    from sqlalchemy.orm import joinedload
+
+    # Create a new database session for this async task
+    db = next(get_db())
+    try:
+        scene = db.query(Scene).options(joinedload(Scene.values)).filter(Scene.id == scene_id).first()
+        if not scene:
+            logger.warning(f"MIDI scene recall: Scene {scene_id} not found")
+            return
+
+        # Apply scene values (instant recall from MIDI)
+        for sv in scene.values:
+            dmx_interface.set_channel(sv.universe_id, sv.channel, sv.value, source="midi_scene")
+
+        # Broadcast active scene change
+        await manager.broadcast({
+            "type": "active_scene_changed",
+            "data": {"scene_id": scene_id}
+        })
+
+        # Send MIDI output feedback (light up button if configured)
+        dmx_interface.send_midi_scene_active(scene_id, True)
+
+        logger.info(f"MIDI recalled scene {scene_id}: {scene.name}")
+
+    except Exception as e:
+        logger.error(f"MIDI scene recall error: {e}")
+    finally:
+        db.close()
 
 
 @asynccontextmanager
@@ -99,10 +141,14 @@ async def lifespan(app: FastAPI):
 
         # Load input configuration if enabled
         if universe.input_enabled and universe.input_type and universe.input_type != "none":
+            # Include channel range in config for input handling
+            input_config = universe.input_config or {}
+            input_config["channel_start"] = universe.input_channel_start or 1
+            input_config["channel_end"] = universe.input_channel_end or 512
             success = await dmx_interface.add_input(
                 universe.id,
                 input_type=universe.input_type,
-                config=universe.input_config or {},
+                config=input_config,
                 passthrough_enabled=universe.passthrough_enabled or False,
                 passthrough_mode=universe.passthrough_mode or "htp",
                 passthrough_show_ui=universe.passthrough_show_ui or False
@@ -131,12 +177,19 @@ async def lifespan(app: FastAPI):
                 "master_universe": group.master_universe,
                 "master_channel": group.master_channel,
                 "enabled": group.enabled,
+                "color_state": {
+                    "h": group.color_state_h or 0,
+                    "s": group.color_state_s or 0,
+                    "l": group.color_state_l if group.color_state_l is not None else 100
+                },
                 "members": [
                     {
                         "id": m.id,
                         "universe_id": m.universe_id,
                         "channel": m.channel,
-                        "base_value": m.base_value
+                        "base_value": m.base_value,
+                        "target_type": m.target_type,
+                        "color_role": m.color_role
                     }
                     for m in group.members
                 ]
@@ -144,6 +197,61 @@ async def lifespan(app: FastAPI):
             groups_data.append(group_dict)
         dmx_interface.load_groups(groups_data)
         logger.info(f"Loaded {len(groups)} groups")
+
+    # Load MIDI CC mappings (for I/O integration with multi-device support)
+    from .database import MIDICCMapping, MIDITrigger
+    cc_mappings = db.query(MIDICCMapping).filter(MIDICCMapping.enabled == True).all()
+    if cc_mappings:
+        cc_mappings_data = [
+            {
+                "id": m.id,
+                "cc_number": m.cc_number,
+                "midi_channel": m.midi_channel,
+                "input_channel": m.input_channel,
+                "label": m.label,
+                "enabled": m.enabled,
+                "device_name": m.device_name  # For multi-device filtering
+            }
+            for m in cc_mappings
+        ]
+        dmx_interface.load_midi_cc_mappings(cc_mappings_data)
+        logger.info(f"Loaded {len(cc_mappings)} MIDI CC mappings for I/O integration")
+
+    # Load MIDI triggers (note -> action mappings with multi-device support)
+    triggers = db.query(MIDITrigger).filter(MIDITrigger.enabled == True).all()
+    if triggers:
+        triggers_data = [
+            {
+                "id": t.id,
+                "note": t.note,
+                "midi_channel": t.midi_channel,
+                "action": t.action,
+                "target_id": t.target_id,
+                "label": t.label,
+                "enabled": t.enabled,
+                "device_name": t.device_name  # For multi-device filtering
+            }
+            for t in triggers
+        ]
+        dmx_interface.load_midi_triggers(triggers_data)
+        logger.info(f"Loaded {len(triggers)} MIDI triggers")
+
+    # Load parked channels (channels locked to fixed values)
+    from .database import ParkedChannel
+    parked_channels = db.query(ParkedChannel).all()
+    for pc in parked_channels:
+        logger.info(f"Loading parked channel: universe={pc.universe_id}, ch={pc.channel}, value={pc.value}")
+        dmx_interface.park_channel(pc.universe_id, pc.channel, pc.value)
+    if parked_channels:
+        logger.info(f"Loaded {len(parked_channels)} parked channels")
+
+    # Set up scene recall callback for MIDI
+    def midi_scene_recall(scene_id: int, velocity: int):
+        """Callback for MIDI note -> scene recall."""
+        import asyncio
+        asyncio.create_task(_recall_scene_from_midi(scene_id, velocity))
+
+    dmx_interface.set_scene_recall_callback(midi_scene_recall)
 
     db.close()
 
@@ -183,6 +291,9 @@ app.include_router(io_router, prefix="/api/io", tags=["Input/Output"])
 app.include_router(mapping_router, prefix="/api/mapping", tags=["Channel Mapping"])
 app.include_router(groups_router, prefix="/api/groups", tags=["Groups"])
 app.include_router(remote_router, prefix="/api/remote", tags=["Remote API"])
+app.include_router(help_router, prefix="/api", tags=["Help"])
+app.include_router(monitor_router, prefix="/api/monitor", tags=["Network Monitor"])
+app.include_router(midi_router, prefix="/api/midi", tags=["MIDI Control"])
 
 
 @app.websocket("/ws")
@@ -219,16 +330,70 @@ async def websocket_endpoint(websocket: WebSocket):
                 channel = data.get("channel")
                 value = data.get("value")
                 if all(v is not None for v in [universe_id, channel, value]):
-                    # Include client_id as source for tracking
+                    # Check if this channel is controlled by input (direct or mapped)
+                    # Skip check if input bypass is active
+                    if not dmx_interface._input_bypass_active:
+                        controlled_channels = dmx_interface.get_input_controlled_channels(universe_id)
+                        if channel in controlled_channels:
+                            # Channel is input-controlled - snap back to input value
+                            input_value = dmx_interface.get_input_value_for_channel(universe_id, channel)
+                            if input_value is not None:
+                                # Send just this channel's value back to snap the fader
+                                snap_values = [-1] * 512  # -1 = don't update
+                                snap_values[channel - 1] = input_value
+                                await manager.send_personal(websocket, {
+                                    "type": "input_to_ui",
+                                    "data": {
+                                        "universe_id": universe_id,
+                                        "values": snap_values
+                                    }
+                                })
+                            # Don't apply the user's value
+                            continue
+                    # Channel is not input-controlled or bypass is active
                     dmx_interface.set_channel(universe_id, channel, value, source=f"user_{client_id}")
 
             elif msg_type == "set_channels":
                 universe_id = data.get("universe_id")
                 values = data.get("values", {})
                 if universe_id is not None:
-                    # Convert string keys to int if needed
                     int_values = {int(k): v for k, v in values.items()}
-                    dmx_interface.set_channels(universe_id, int_values, source=f"user_{client_id}")
+
+                    # Check which channels are input-controlled (direct or mapped)
+                    if not dmx_interface._input_bypass_active:
+                        controlled_channels = dmx_interface.get_input_controlled_channels(universe_id)
+
+                        # Split channels: input-controlled vs free
+                        allowed_values = {
+                            ch: val for ch, val in int_values.items()
+                            if ch not in controlled_channels
+                        }
+                        blocked_channels = [
+                            ch for ch in int_values.keys()
+                            if ch in controlled_channels
+                        ]
+
+                        # Apply allowed channels (not input-controlled)
+                        if allowed_values:
+                            dmx_interface.set_channels(universe_id, allowed_values, source=f"user_{client_id}")
+
+                        # Snap blocked channels back to their input values
+                        if blocked_channels:
+                            snap_values = [-1] * 512  # -1 = don't update
+                            for ch in blocked_channels:
+                                input_value = dmx_interface.get_input_value_for_channel(universe_id, ch)
+                                if input_value is not None:
+                                    snap_values[ch - 1] = input_value
+                            await manager.send_personal(websocket, {
+                                "type": "input_to_ui",
+                                "data": {
+                                    "universe_id": universe_id,
+                                    "values": snap_values
+                                }
+                            })
+                    else:
+                        # Bypass active - apply all channel changes
+                        dmx_interface.set_channels(universe_id, int_values, source=f"user_{client_id}")
 
             elif msg_type == "get_values":
                 universe_id = data.get("universe_id")
@@ -278,6 +443,23 @@ async def websocket_endpoint(websocket: WebSocket):
                 await manager.broadcast({
                     "type": "active_scene_changed",
                     "data": {"scene_id": scene_id}
+                })
+
+            elif msg_type == "set_global_grandmaster":
+                value = data.get("value")
+                if value is not None and 0 <= value <= 255:
+                    dmx_interface.set_global_grandmaster(value)
+
+            elif msg_type == "set_universe_grandmaster":
+                universe_id = data.get("universe_id")
+                value = data.get("value")
+                if universe_id is not None and value is not None and 0 <= value <= 255:
+                    dmx_interface.set_universe_grandmaster(universe_id, value)
+
+            elif msg_type == "get_grandmasters":
+                await manager.send_personal(websocket, {
+                    "type": "grandmasters",
+                    "data": dmx_interface.get_all_grandmasters()
                 })
 
     except WebSocketDisconnect:

@@ -34,7 +34,7 @@ class ConnectionManager:
             return
 
         dead_connections = set()
-        for connection in self.active_connections:
+        for connection in list(self.active_connections):
             try:
                 await connection.send_json(message)
             except Exception:
@@ -59,19 +59,26 @@ class ConnectionManager:
         """Notify all clients that patch configuration has changed."""
         await self.broadcast({"type": "patches_changed"})
 
-    async def broadcast_group_value_changed(self, group_id: int, value: int):
+    async def broadcast_group_value_changed(self, group_id: int, value: int, source: str = None):
         """Notify all clients that a group master value has changed."""
+        data = {
+            "group_id": group_id,
+            "value": value
+        }
+        if source:
+            data["source"] = source
         await self.broadcast({
             "type": "group_value_changed",
-            "data": {
-                "group_id": group_id,
-                "value": value
-            }
+            "data": data
         })
 
     async def broadcast_groups_changed(self):
         """Notify all clients that group list has changed (create/update/delete)."""
         await self.broadcast({"type": "groups_changed"})
+
+    async def broadcast_grids_changed(self):
+        """Notify all clients that group grid configuration has changed."""
+        await self.broadcast({"type": "grids_changed"})
 
 
 # Global instance

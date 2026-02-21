@@ -3,17 +3,21 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from ..database import get_db, Universe, UniverseOutput
+from sqlalchemy import func
+from ..database import get_db, Universe, UniverseOutput, Patch, Fixture, SceneValue
 from ..auth import get_current_user
 from ..dmx_interface import dmx_interface
+from ..websocket_manager import manager
 
 router = APIRouter()
 
 
 class InputConfigRequest(BaseModel):
-    input_type: str = "none"  # none, artnet_input, sacn_input
+    input_type: str = "none"  # none, artnet_input, sacn_input, midi_input
     input_config: dict = {}
     input_enabled: bool = False
+    input_channel_start: Optional[int] = None  # Start of input-controlled channel range
+    input_channel_end: Optional[int] = None  # End of input-controlled channel range
 
 
 class PassthroughConfigRequest(BaseModel):
@@ -114,6 +118,7 @@ def universe_io_to_dict(universe: Universe, db: Session = None) -> dict:
     return {
         "id": universe.id,
         "label": universe.label,
+        "master_fader_color": universe.master_fader_color or "#00bcd4",
         # Multiple outputs
         "outputs": outputs_list,
         # Legacy single output for backwards compatibility
@@ -128,6 +133,8 @@ def universe_io_to_dict(universe: Universe, db: Session = None) -> dict:
             "input_type": universe.input_type or "none",
             "config": universe.input_config or {},
             "enabled": universe.input_enabled or False,
+            "channel_start": universe.input_channel_start or 1,
+            "channel_end": universe.input_channel_end or 512,
             "status": input_status
         },
         # Passthrough info - convert old format to new passthrough_mode
@@ -144,6 +151,41 @@ async def get_io_config(db: Session = Depends(get_db)):
         "input_protocols": dmx_interface.get_input_protocols(),
         "output_protocols": dmx_interface.get_protocols()
     }
+
+
+# Input bypass endpoints - must be before /{universe_id} routes
+class InputBypassRequest(BaseModel):
+    bypass: bool
+
+
+@router.put("/bypass")
+async def set_input_bypass(
+    config: InputBypassRequest,
+    user: dict = Depends(get_current_user)
+):
+    """Toggle global input bypass.
+
+    When enabled, DMX input is received but not applied to output.
+    This is useful for temporarily taking manual control without
+    reconfiguring passthrough settings.
+    """
+    if not user.get("can_bypass", True):
+        raise HTTPException(status_code=403, detail="Permission denied: cannot toggle input bypass")
+    dmx_interface.set_input_bypass(config.bypass)
+
+    # Broadcast bypass state to all connected clients
+    await manager.broadcast({
+        "type": "input_bypass_changed",
+        "data": {"bypass": config.bypass}
+    })
+
+    return {"bypass": config.bypass}
+
+
+@router.get("/bypass")
+async def get_input_bypass():
+    """Get current input bypass state."""
+    return {"bypass": dmx_interface.get_input_bypass()}
 
 
 @router.get("/{universe_id}")
@@ -214,10 +256,14 @@ async def update_universe_io(
 
     if input_changed or config.passthrough_enabled is not None or config.passthrough_mode is not None or config.passthrough_show_ui is not None:
         if universe.input_enabled and universe.input_type != "none":
+            # Include channel range in config for input handling
+            input_config = universe.input_config or {}
+            input_config["channel_start"] = universe.input_channel_start or 1
+            input_config["channel_end"] = universe.input_channel_end or 512
             await dmx_interface.add_input(
                 universe.id,
                 input_type=universe.input_type,
-                config=universe.input_config or {},
+                config=input_config,
                 passthrough_enabled=universe.passthrough_enabled or False,
                 passthrough_mode=universe.passthrough_mode or "htp",
                 passthrough_show_ui=universe.passthrough_show_ui or False
@@ -398,15 +444,23 @@ async def configure_input(
     universe.input_type = config.input_type
     universe.input_config = config.input_config
     universe.input_enabled = config.input_enabled
+    if config.input_channel_start is not None:
+        universe.input_channel_start = config.input_channel_start
+    if config.input_channel_end is not None:
+        universe.input_channel_end = config.input_channel_end
     db.commit()
     db.refresh(universe)
 
     # Apply to runtime
     if config.input_enabled and config.input_type != "none":
+        # Include channel range in config for input handling
+        input_config = config.input_config or {}
+        input_config["channel_start"] = universe.input_channel_start or 1
+        input_config["channel_end"] = universe.input_channel_end or 512
         await dmx_interface.add_input(
             universe.id,
             input_type=config.input_type,
-            config=config.input_config,
+            config=input_config,
             passthrough_enabled=universe.passthrough_enabled or False,
             passthrough_mode=universe.passthrough_mode or "htp",
             passthrough_show_ui=universe.passthrough_show_ui or False
@@ -485,10 +539,14 @@ async def enable_input(
     universe.input_enabled = True
     db.commit()
 
+    # Include channel range in config for input handling
+    input_config = universe.input_config or {}
+    input_config["channel_start"] = universe.input_channel_start or 1
+    input_config["channel_end"] = universe.input_channel_end or 512
     await dmx_interface.add_input(
         universe.id,
         input_type=universe.input_type,
-        config=universe.input_config or {},
+        config=input_config,
         passthrough_enabled=universe.passthrough_enabled or False,
         passthrough_mode=universe.passthrough_mode or "htp",
         passthrough_show_ui=universe.passthrough_show_ui or False
@@ -587,49 +645,83 @@ async def get_network_interfaces():
     return {"interfaces": interfaces}
 
 
-@router.get("/help/loopback")
-async def get_loopback_help():
-    """Return documentation about loopback prevention options."""
-    return {
-        "title": "Loopback Prevention Options",
-        "description": "When using Art-Net/sACN input and output on the same machine, you may receive your own output packets. Here are ways to prevent this:",
-        "options": [
-            {
-                "method": "Different Ports",
-                "description": "Use a non-standard port for input (e.g., 6455 instead of 6454)",
-                "pros": ["Simple to configure"],
-                "cons": ["External source must send to non-standard port"]
-            },
-            {
-                "method": "Different Universes",
-                "description": "Input listens to Art-Net Universe 1, Output sends to Universe 0",
-                "pros": ["Standard ports, no special config on external source"],
-                "cons": ["Must configure universe numbers correctly"]
-            },
-            {
-                "method": "Ignore Self (ignore_self option)",
-                "description": "Automatically filter packets from this machine's IP addresses",
-                "pros": ["Automatic, no manual IP entry needed"],
-                "cons": ["May not work in all network configurations"]
-            },
-            {
-                "method": "Ignore IP (ignore_ip option)",
-                "description": "Manually specify an IP to ignore (e.g., your machine's IP)",
-                "pros": ["Precise control"],
-                "cons": ["Must know and enter the correct IP"]
-            },
-            {
-                "method": "Source IP Filter (source_ip option)",
-                "description": "Only accept packets from a specific external IP",
-                "pros": ["Most secure, only trusted source accepted"],
-                "cons": ["Must know external source IP, only one source allowed"]
-            },
-            {
-                "method": "Unicast Output (Recommended)",
-                "description": "Send output to a specific device IP instead of broadcast (255.255.255.255). Note: The pyartnet library doesn't set the SO_BROADCAST socket option, which can cause 'Permission denied' errors when using broadcast addresses, especially with elevated privileges (sudo).",
-                "pros": ["No broadcast permission issues", "More efficient network usage", "No loopback interference"],
-                "cons": ["Must know target device IP", "Only works with one target device"]
-            }
-        ],
-        "recommendation": "For single-device setups, use 'Unicast Output' to avoid broadcast permission issues. For multi-device setups, use 'Different Universes' or enable 'ignore_self'. If you know the external source IP, use 'source_ip' filter for best security."
-    }
+@router.get("/channel-usage")
+async def get_channel_usage(db: Session = Depends(get_db)):
+    """Get channel usage information for all universes.
+
+    Returns the highest used channel per universe, calculated from:
+    - Patched fixtures (start_channel + channel_count)
+    - Saved scenes (highest channel with non-zero value)
+    """
+    universes = db.query(Universe).all()
+    result = {}
+
+    for universe in universes:
+        # Get all patches for this universe with their fixtures
+        patches = db.query(Patch).filter(
+            Patch.universe_id == universe.id
+        ).join(Fixture).all()
+
+        highest_patched = 0
+        patched_channels = set()
+
+        for patch in patches:
+            # Get channel count from fixture definition - try multiple sources
+            fixture_def = patch.fixture.definition_json or {}
+
+            # Try "channels" array first
+            channels_array = fixture_def.get("channels", [])
+            channel_count = len(channels_array) if channels_array else 0
+
+            # Fallback: try "channelCount" or "channel_count" fields
+            if channel_count == 0:
+                channel_count = fixture_def.get("channelCount", 0) or fixture_def.get("channel_count", 0)
+
+            # Fallback: try "numChannels" or "totalChannels"
+            if channel_count == 0:
+                channel_count = fixture_def.get("numChannels", 0) or fixture_def.get("totalChannels", 0)
+
+            # Fallback: try to infer from modes
+            if channel_count == 0:
+                modes = fixture_def.get("modes", [])
+                if modes and len(modes) > 0:
+                    # Use first mode's channel count
+                    first_mode = modes[0]
+                    if isinstance(first_mode, dict):
+                        channel_count = first_mode.get("channels", 0) or first_mode.get("channelCount", 0) or len(first_mode.get("channelList", []))
+
+            # Ensure at least 1 channel
+            if channel_count == 0:
+                channel_count = 1
+
+            end_channel = patch.start_channel + channel_count - 1
+
+            # Track highest channel
+            if end_channel > highest_patched:
+                highest_patched = end_channel
+
+            # Track all patched channels
+            for ch in range(patch.start_channel, end_channel + 1):
+                patched_channels.add(ch)
+
+        # Find highest channel with non-zero value in any saved scene
+        highest_scene = db.query(func.max(SceneValue.channel)).filter(
+            SceneValue.universe_id == universe.id,
+            SceneValue.value > 0
+        ).scalar() or 0
+
+        # Highest used is the max of patched and scene channels
+        highest_used = max(highest_patched, highest_scene)
+
+        result[str(universe.id)] = {
+            "universe_id": universe.id,
+            "label": universe.label,
+            "highest_patched": highest_patched,
+            "highest_scene": highest_scene,
+            "highest_used": highest_used,
+            "patched_count": len(patched_channels),
+            "patch_count": len(patches),
+            "patched_channels": sorted(list(patched_channels))
+        }
+
+    return {"universes": result}

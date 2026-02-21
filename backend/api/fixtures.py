@@ -1,12 +1,14 @@
 """Fixture library API endpoints."""
 import json
 import os
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from ..database import get_db, Fixture
 from ..auth import get_current_user
+from ..websocket_manager import manager
 
 router = APIRouter()
 
@@ -32,6 +34,7 @@ def fixture_to_dict(fixture: Fixture) -> dict:
         "id": fixture.id,
         "name": fixture.name,
         "manufacturer": fixture.manufacturer,
+        "position": fixture.position,
         "channel_count": len(definition.get("channels", [])),
         "channels": definition.get("channels", []),
         "modes": definition.get("modes", []),
@@ -42,9 +45,29 @@ def fixture_to_dict(fixture: Fixture) -> dict:
 
 @router.get("")
 async def list_fixtures(db: Session = Depends(get_db)):
-    """List all fixtures in the library."""
-    fixtures = db.query(Fixture).all()
+    """List all fixtures in the library ordered by position."""
+    fixtures = db.query(Fixture).order_by(Fixture.position).all()
     return {"fixtures": [fixture_to_dict(f) for f in fixtures]}
+
+
+class ReorderFixturesRequest(BaseModel):
+    fixture_ids: List[int]
+
+
+@router.put("/reorder")
+async def reorder_fixtures(
+    request: ReorderFixturesRequest,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """Reorder fixtures by updating their positions."""
+    for new_position, fixture_id in enumerate(request.fixture_ids):
+        fixture = db.query(Fixture).filter(Fixture.id == fixture_id).first()
+        if fixture:
+            fixture.position = new_position
+    db.commit()
+    await manager.broadcast({"type": "fixtures_changed"})
+    return {"status": "reordered", "order": request.fixture_ids}
 
 
 @router.get("/{fixture_id}")
@@ -67,10 +90,14 @@ async def create_fixture(
     if "channels" not in request.definition_json or not request.definition_json["channels"]:
         raise HTTPException(status_code=400, detail="Fixture must have at least one channel")
 
+    # Get max position to place new fixture at end
+    max_pos = db.query(func.max(Fixture.position)).scalar() or -1
+
     fixture = Fixture(
         name=request.name,
         manufacturer=request.manufacturer,
-        definition_json=request.definition_json
+        definition_json=request.definition_json,
+        position=max_pos + 1
     )
     db.add(fixture)
     db.commit()

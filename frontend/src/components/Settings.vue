@@ -148,6 +148,8 @@
             <th>Name</th>
             <th>Auth</th>
             <th>Allowed Pages</th>
+            <th>Allowed Grids</th>
+            <th>Allowed Scenes</th>
             <th>Admin</th>
             <th>Actions</th>
           </tr>
@@ -170,6 +172,26 @@
                 </span>
               </span>
             </td>
+            <td>
+              <span class="page-badges">
+                <span v-if="!profile.allowed_grids || profile.allowed_grids.length === 0" class="page-badge" style="opacity: 0.6;">
+                  All
+                </span>
+                <span v-else v-for="gridId in profile.allowed_grids" :key="gridId" class="page-badge">
+                  {{ getGridName(gridId) }}
+                </span>
+              </span>
+            </td>
+            <td>
+              <span class="page-badges">
+                <span v-if="!profile.allowed_scenes || profile.allowed_scenes.length === 0" class="page-badge" style="opacity: 0.6;">
+                  All
+                </span>
+                <span v-else v-for="sceneId in profile.allowed_scenes" :key="sceneId" class="page-badge">
+                  {{ getSceneName(sceneId) }}
+                </span>
+              </span>
+            </td>
             <td>{{ profile.is_admin ? 'Yes' : 'No' }}</td>
             <td>
               <button class="btn btn-small btn-secondary" @click="editProfile(profile)">Edit</button>
@@ -177,7 +199,7 @@
             </td>
           </tr>
           <tr v-if="profiles.length === 0">
-            <td colspan="5" style="text-align: center; color: var(--text-secondary);">
+            <td colspan="7" style="text-align: center; color: var(--text-secondary);">
               No profiles yet
             </td>
           </tr>
@@ -317,9 +339,57 @@
         </div>
 
         <div class="form-group">
+          <label class="form-label">Allowed Grids</label>
+          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+            Select which grids this profile can access on the Groups page. Leave empty for all grids.
+          </p>
+          <div class="page-checkboxes" v-if="availableGrids.length > 0">
+            <label v-for="grid in availableGrids" :key="grid.id" class="page-checkbox-label">
+              <input type="checkbox" :value="grid.id" v-model="profileForm.allowed_grids">
+              {{ grid.name }}
+            </label>
+          </div>
+          <div v-else style="color: var(--text-secondary); font-size: 13px; font-style: italic;">
+            No grids created yet. Create grids on the Groups page first.
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Allowed Scenes</label>
+          <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 8px;">
+            Select which scenes this profile can access in the scene bar and Scenes page. Leave empty for all scenes.
+          </p>
+          <div class="page-checkboxes" v-if="availableScenes.length > 0">
+            <label v-for="scene in availableScenes" :key="scene.id" class="page-checkbox-label">
+              <input type="checkbox" :value="scene.id" v-model="profileForm.allowed_scenes">
+              {{ scene.name }}
+            </label>
+          </div>
+          <div v-else style="color: var(--text-secondary); font-size: 13px; font-style: italic;">
+            No scenes created yet. Create scenes on the Scenes page first.
+          </div>
+        </div>
+
+        <div class="form-group">
           <label class="page-checkbox-label">
             <input type="checkbox" v-model="profileForm.is_admin">
             Admin (can manage profiles and access all settings)
+          </label>
+        </div>
+
+        <div class="form-group">
+          <label style="font-weight: 500; margin-bottom: 8px; display: block;">Feature Permissions</label>
+          <label class="page-checkbox-label">
+            <input type="checkbox" v-model="profileForm.can_park">
+            Can Park Channels (lock channels at fixed values)
+          </label>
+          <label class="page-checkbox-label">
+            <input type="checkbox" v-model="profileForm.can_highlight">
+            Can Highlight Channels (solo/highlight mode)
+          </label>
+          <label class="page-checkbox-label">
+            <input type="checkbox" v-model="profileForm.can_bypass">
+            Can Toggle Input Bypass (temporarily disable DMX input)
           </label>
         </div>
 
@@ -341,6 +411,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useAuthStore } from '../stores/auth.js'
 import { useThemeStore } from '../stores/theme.js'
+import { PAGES } from '../config/pages.js'
 
 const authStore = useAuthStore()
 const themeStore = useThemeStore()
@@ -386,29 +457,33 @@ const profileForm = ref({
   password: '',
   ip_addresses: [],
   allowed_pages: [],
-  is_admin: false
+  allowed_grids: [],
+  allowed_scenes: [],
+  is_admin: false,
+  can_park: true,
+  can_highlight: true,
+  can_bypass: true
 })
 const profileError = ref('')
 
+// Available grids and scenes for profile access control
+const availableGrids = ref([])
+const availableScenes = ref([])
 
-const availablePages = [
-  { id: 'faders', name: 'Faders' },
-  { id: 'scenes', name: 'Scenes' },
-  { id: 'fixtures', name: 'Fixtures' },
-  { id: 'patch', name: 'Patch' },
-  { id: 'io', name: 'I/O' },
-  { id: 'groups', name: 'Groups' },
-  { id: 'settings', name: 'Settings' }
-]
+// Pages list from single source of truth
+const availablePages = PAGES
+const pageLabels = Object.fromEntries(PAGES.map(p => [p.id, p.name]))
 
-const pageLabels = {
-  faders: 'Faders',
-  scenes: 'Scenes',
-  fixtures: 'Fixtures',
-  patch: 'Patch',
-  io: 'I/O',
-  groups: 'Groups',
-  settings: 'Settings'
+// Helper to get grid name by ID
+function getGridName(gridId) {
+  const grid = availableGrids.value.find(g => g.id === gridId)
+  return grid ? grid.name : `Grid ${gridId}`
+}
+
+// Helper to get scene name by ID
+function getSceneName(sceneId) {
+  const scene = availableScenes.value.find(s => s.id === sceneId)
+  return scene ? scene.name : `Scene ${sceneId}`
 }
 
 // Computed for profile save button
@@ -427,6 +502,8 @@ onMounted(async () => {
   await loadSettings()
   await loadBackups()
   await loadProfiles()
+  await loadGrids()
+  await loadScenes()
 })
 
 async function fetchWithAuth(url, options = {}) {
@@ -545,6 +622,30 @@ async function loadProfiles() {
   }
 }
 
+async function loadGrids() {
+  try {
+    const response = await fetchWithAuth('/api/groups/grids')
+    if (response.ok) {
+      const data = await response.json()
+      availableGrids.value = data.grids || []
+    }
+  } catch (e) {
+    console.error('Failed to load grids:', e)
+  }
+}
+
+async function loadScenes() {
+  try {
+    const response = await fetchWithAuth('/api/scenes')
+    if (response.ok) {
+      const data = await response.json()
+      availableScenes.value = data.scenes || []
+    }
+  } catch (e) {
+    console.error('Failed to load scenes:', e)
+  }
+}
+
 function openCreateProfile() {
   editingProfile.value = null
   profileForm.value = {
@@ -552,7 +653,12 @@ function openCreateProfile() {
     password: '',
     ip_addresses: [],
     allowed_pages: [],
-    is_admin: false
+    allowed_grids: [],
+    allowed_scenes: [],
+    is_admin: false,
+    can_park: true,
+    can_highlight: true,
+    can_bypass: true
   }
   profileError.value = ''
   showProfileModal.value = true
@@ -565,7 +671,12 @@ function editProfile(profile) {
     password: '',
     ip_addresses: profile.ip_addresses ? [...profile.ip_addresses] : [],
     allowed_pages: [...profile.allowed_pages],
-    is_admin: profile.is_admin
+    allowed_grids: profile.allowed_grids ? [...profile.allowed_grids] : [],
+    allowed_scenes: profile.allowed_scenes ? [...profile.allowed_scenes] : [],
+    is_admin: profile.is_admin,
+    can_park: profile.can_park !== false,
+    can_highlight: profile.can_highlight !== false,
+    can_bypass: profile.can_bypass !== false
   }
   profileError.value = ''
   showProfileModal.value = true
@@ -606,7 +717,12 @@ async function saveProfile() {
     const payload = {
       name: profileForm.value.name.trim(),
       allowed_pages: profileForm.value.allowed_pages,
-      is_admin: profileForm.value.is_admin
+      allowed_grids: profileForm.value.allowed_grids,
+      allowed_scenes: profileForm.value.allowed_scenes,
+      is_admin: profileForm.value.is_admin,
+      can_park: profileForm.value.can_park,
+      can_highlight: profileForm.value.can_highlight,
+      can_bypass: profileForm.value.can_bypass
     }
 
     // Only include password if provided
@@ -653,7 +769,12 @@ function closeProfileModal() {
     password: '',
     ip_addresses: [],
     allowed_pages: [],
-    is_admin: false
+    allowed_grids: [],
+    allowed_scenes: [],
+    is_admin: false,
+    can_park: true,
+    can_highlight: true,
+    can_bypass: true
   }
   profileError.value = ''
 }
@@ -778,9 +899,32 @@ async function confirmDeleteProfile(profile) {
   font-family: monospace;
 }
 
-@media (max-width: 480px) {
+@media (max-width: 768px) {
   .color-grid {
     grid-template-columns: 1fr;
+  }
+
+  /* Access Profiles table: hide Allowed Grids (4th) and Admin (5th) columns */
+  .data-table th:nth-child(4),
+  .data-table td:nth-child(4),
+  .data-table th:nth-child(5),
+  .data-table td:nth-child(5) {
+    display: none;
+  }
+
+  .data-table .btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .page-badge {
+    font-size: 9px;
+    padding: 2px 4px;
+  }
+
+  .auth-badge {
+    font-size: 9px;
+    padding: 2px 4px;
   }
 }
 

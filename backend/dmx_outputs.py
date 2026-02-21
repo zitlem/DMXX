@@ -165,7 +165,7 @@ class SACNOutput(DMXOutput):
         try:
             sacn_universe = self.config.get("universe", self.universe_id)
             multicast = self.config.get("multicast", True)
-            unicast_ip = self.config.get("unicast_ip")
+            unicast_ip = self.config.get("unicast_ip") or self.config.get("ip")
             fps = self.config.get("fps", 40)
             source_name = self.config.get("source_name", "DMXX")
 

@@ -67,10 +67,34 @@ const routes = [
     meta: { requiresAuth: true, page: 'settings' }
   },
   {
+    path: '/help',
+    name: 'Help',
+    component: () => import('./components/Help.vue'),
+    meta: { requiresAuth: true, page: 'help' }
+  },
+  {
     path: '/unauthorized',
     name: 'Unauthorized',
     component: () => import('./components/Unauthorized.vue'),
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/monitor',
+    name: 'NetworkMonitor',
+    component: () => import('./components/NetworkMonitor.vue'),
+    meta: { requiresAuth: true, page: 'monitor' }
+  },
+  {
+    path: '/control-flow',
+    name: 'ControlFlow',
+    component: () => import('./components/ControlFlow.vue'),
+    meta: { requiresAuth: true, page: 'io' }
+  },
+  {
+    path: '/midi',
+    name: 'MIDIControl',
+    component: () => import('./components/MIDIControl.vue'),
+    meta: { requiresAuth: true, page: 'midi' }
   }
 ]
 

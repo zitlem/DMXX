@@ -71,8 +71,10 @@ router = APIRouter()
 class ChannelMappingEntry(BaseModel):
     src_universe: int
     src_channel: int  # 1-512
-    dst_universe: int
-    dst_channel: int  # 1-512
+    dst_universe: Optional[int] = None  # For channel targets
+    dst_channel: Optional[int] = None   # For channel targets (1-512)
+    dst_target_type: str = "channel"    # "channel", "universe_master", "global_master"
+    dst_target_universe_id: Optional[int] = None  # For universe_master target
 
 
 class ChannelMappingConfig(BaseModel):
@@ -169,10 +171,21 @@ async def create_mapping(
     Note: Mapped source channels do NOT pass through 1:1. If you map Ch1->Ch7,
     Input Ch1 only goes to Output Ch7, not also to Output Ch1.
     """
-    # Validate channel numbers
+    # Validate mappings
     for m in config.mappings:
-        if not (1 <= m.src_channel <= 512) or not (1 <= m.dst_channel <= 512):
-            raise HTTPException(status_code=400, detail="Channel numbers must be between 1 and 512")
+        if not (1 <= m.src_channel <= 512):
+            raise HTTPException(status_code=400, detail="Source channel must be between 1 and 512")
+        # Validate based on target type
+        if m.dst_target_type == "channel":
+            if m.dst_channel is None or not (1 <= m.dst_channel <= 512):
+                raise HTTPException(status_code=400, detail="Destination channel must be between 1 and 512 for channel targets")
+        elif m.dst_target_type == "universe_master":
+            if m.dst_target_universe_id is None:
+                raise HTTPException(status_code=400, detail="Universe ID required for universe_master target")
+        elif m.dst_target_type == "global_master":
+            pass  # No additional params needed
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid target type: {m.dst_target_type}")
 
     # If enabling this mapping, disable all others
     if config.enabled:
@@ -212,10 +225,21 @@ async def update_mapping(
     if not mapping:
         raise HTTPException(status_code=404, detail="Mapping not found")
 
-    # Validate channel numbers
+    # Validate mappings
     for m in config.mappings:
-        if not (1 <= m.src_channel <= 512) or not (1 <= m.dst_channel <= 512):
-            raise HTTPException(status_code=400, detail="Channel numbers must be between 1 and 512")
+        if not (1 <= m.src_channel <= 512):
+            raise HTTPException(status_code=400, detail="Source channel must be between 1 and 512")
+        # Validate based on target type
+        if m.dst_target_type == "channel":
+            if m.dst_channel is None or not (1 <= m.dst_channel <= 512):
+                raise HTTPException(status_code=400, detail="Destination channel must be between 1 and 512 for channel targets")
+        elif m.dst_target_type == "universe_master":
+            if m.dst_target_universe_id is None:
+                raise HTTPException(status_code=400, detail="Universe ID required for universe_master target")
+        elif m.dst_target_type == "global_master":
+            pass  # No additional params needed
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid target type: {m.dst_target_type}")
 
     # If enabling this mapping, disable all others
     if config.enabled and not mapping.enabled:

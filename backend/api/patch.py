@@ -1,8 +1,9 @@
 """Patch management API endpoints."""
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from ..database import get_db, Patch, Fixture, Universe, ChannelLabel
 from ..auth import get_current_user
 from ..websocket_manager import manager
@@ -49,6 +50,7 @@ def patch_to_dict(patch: Patch) -> dict:
         "channel_count": channel_count,
         "label": patch.label,
         "group_color": patch.group_color or "",
+        "position": patch.position,
         "channels": fixture_def.get("channels", [])
     }
 
@@ -58,13 +60,33 @@ async def list_patches(
     universe_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
-    """List all patches, optionally filtered by universe."""
+    """List all patches, optionally filtered by universe, ordered by position."""
     query = db.query(Patch)
     if universe_id is not None:
         query = query.filter(Patch.universe_id == universe_id)
 
-    patches = query.all()
+    patches = query.order_by(Patch.position).all()
     return {"patches": [patch_to_dict(p) for p in patches]}
+
+
+class ReorderPatchesRequest(BaseModel):
+    patch_ids: List[int]
+
+
+@router.put("/reorder")
+async def reorder_patches(
+    request: ReorderPatchesRequest,
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user)
+):
+    """Reorder patches by updating their positions."""
+    for new_position, patch_id in enumerate(request.patch_ids):
+        patch = db.query(Patch).filter(Patch.id == patch_id).first()
+        if patch:
+            patch.position = new_position
+    db.commit()
+    await manager.broadcast_patches_changed()
+    return {"status": "reordered", "order": request.patch_ids}
 
 
 @router.get("/{patch_id}")
@@ -120,13 +142,17 @@ async def create_patch(
                 detail=f"Channel conflict with existing patch '{p.label or p.fixture.name}' (channels {p_start}-{p_end})"
             )
 
+    # Get max position to place new patch at end
+    max_pos = db.query(func.max(Patch.position)).scalar() or -1
+
     # Create patch
     patch = Patch(
         fixture_id=request.fixture_id,
         universe_id=request.universe_id,
         start_channel=request.start_channel,
         label=request.label or "",
-        group_color=request.group_color or ""
+        group_color=request.group_color or "",
+        position=max_pos + 1
     )
     db.add(patch)
     db.commit()

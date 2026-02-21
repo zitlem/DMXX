@@ -238,29 +238,57 @@ async def trigger_scene(
             target_values[sv.universe_id] = {}
         target_values[sv.universe_id][sv.channel] = sv.value
 
+    # Filter out input-controlled channels if input is active
+    filtered_values = {}
+    for uid, channels in target_values.items():
+        if uid in dmx_interface.inputs:
+            # Input is active - filter out channels in the input range
+            universe = db.query(Universe).filter(Universe.id == uid).first()
+            input_start = universe.input_channel_start or 1 if universe else 1
+            input_end = universe.input_channel_end or 512 if universe else 512
+            filtered_values[uid] = {
+                ch: val for ch, val in channels.items()
+                if ch < input_start or ch > input_end
+            }
+        else:
+            # No active input - use all channels
+            filtered_values[uid] = channels
+
     # Apply transition
     if scene.transition_type == "instant" or scene.duration <= 0:
-        for uid, channels in target_values.items():
-            dmx_interface.set_channels(uid, channels)
+        for uid, channels in filtered_values.items():
+            if channels:  # Only apply if there are channels to set
+                dmx_interface.set_channels(uid, channels)
     elif scene.transition_type == "fade":
-        await apply_fade(target_values, scene.duration, crossfade=False)
+        await apply_fade(filtered_values, scene.duration, crossfade=False)
     elif scene.transition_type == "crossfade":
-        await apply_fade(target_values, scene.duration, crossfade=True)
+        await apply_fade(filtered_values, scene.duration, crossfade=True)
 
     # Restore group master values
+    # Note: We only restore the master value, NOT apply to member channels
+    # The scene already has the correct channel values - applying groups would overwrite them
     if scene.group_values:
         for gv in scene.group_values:
             group = db.query(Group).filter(Group.id == gv.group_id).first()
             if group:
                 group.master_value = gv.master_value
+                # Update runtime group master value (without applying to members)
+                if gv.group_id in dmx_interface._groups:
+                    dmx_interface._groups[gv.group_id]["master_value"] = gv.master_value
+                # If physical master, set the channel but skip group member application
                 if group.master_universe and group.master_channel:
-                    dmx_interface.set_channel(group.master_universe, group.master_channel, gv.master_value, source="remote_api")
-                else:
-                    dmx_interface.apply_group_direct(gv.group_id, gv.master_value)
+                    dmx_interface.set_channel(group.master_universe, group.master_channel, gv.master_value, source="remote_api", _from_group=True)
+                # For virtual masters, we've already updated the runtime value above
         db.commit()
 
         for gv in scene.group_values:
             await manager.broadcast_group_value_changed(gv.group_id, gv.master_value)
+
+    # Broadcast active scene change to all WebSocket clients
+    await manager.broadcast({
+        "type": "active_scene_changed",
+        "data": {"scene_id": scene_id}
+    })
 
     return TriggerResponse(status="success", message=f"Scene '{scene.name}' triggered")
 

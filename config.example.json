@@ -1,0 +1,7 @@
+{
+  "password": "change-me",
+  "secret_key": "change-me-in-production",
+  "ip_whitelist": [],
+  "host": "0.0.0.0",
+  "port": 8000
+}

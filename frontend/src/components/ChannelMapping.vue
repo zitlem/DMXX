@@ -47,7 +47,7 @@
     </div>
 
     <!-- Edit/Create Modal -->
-    <div v-if="showEditor" class="modal-overlay" @click.self="closeEditor">
+    <div v-if="showEditor" class="modal-overlay">
       <div class="modal modal-large" :class="{ 'modal-visual': editMode === 'visual' }">
         <div class="modal-header">
           <h3 class="modal-title">{{ editingMapping ? 'Edit Mapping' : 'Create Mapping' }}</h3>
@@ -109,8 +109,8 @@
                   <tr>
                     <th>Source Universe</th>
                     <th>Source Channel</th>
-                    <th>Dest Universe</th>
-                    <th>Dest Channel</th>
+                    <th>Target Type</th>
+                    <th>Destination</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -118,19 +118,37 @@
                   <tr v-for="(m, idx) in editorForm.mappings" :key="idx">
                     <td>
                       <select class="form-select" v-model.number="m.src_universe">
-                        <option v-for="u in universes" :key="u.id" :value="u.id">{{ u.label }}</option>
+                        <option v-for="u in universes" :key="u.id" :value="u.id">{{ getUniverseLabel(u) }}</option>
                       </select>
                     </td>
                     <td>
                       <input type="number" class="form-input" v-model.number="m.src_channel" min="1" max="512">
                     </td>
                     <td>
-                      <select class="form-select" v-model.number="m.dst_universe">
-                        <option v-for="u in universes" :key="u.id" :value="u.id">{{ u.label }}</option>
+                      <select class="form-select target-type-select" v-model="m.dst_target_type" @change="onTargetTypeChange(m)">
+                        <option value="channel">Channel</option>
+                        <option value="universe_master">Universe Master</option>
+                        <option value="global_master">Global Master</option>
                       </select>
                     </td>
-                    <td>
-                      <input type="number" class="form-input" v-model.number="m.dst_channel" min="1" max="512">
+                    <td class="dest-cell">
+                      <!-- Channel target -->
+                      <template v-if="m.dst_target_type === 'channel' || !m.dst_target_type">
+                        <select class="form-select dest-universe" v-model.number="m.dst_universe">
+                          <option v-for="u in universes" :key="u.id" :value="u.id">{{ getUniverseLabel(u) }}</option>
+                        </select>
+                        <input type="number" class="form-input dest-channel" v-model.number="m.dst_channel" min="1" max="512" placeholder="Ch">
+                      </template>
+                      <!-- Universe Master target -->
+                      <template v-else-if="m.dst_target_type === 'universe_master'">
+                        <select class="form-select" v-model.number="m.dst_target_universe_id">
+                          <option v-for="u in universes" :key="u.id" :value="u.id">{{ u.label }} Master</option>
+                        </select>
+                      </template>
+                      <!-- Global Master target -->
+                      <template v-else-if="m.dst_target_type === 'global_master'">
+                        <span class="global-master-label">Global Master</span>
+                      </template>
                     </td>
                     <td>
                       <button class="btn btn-small btn-danger" @click="removeMapping(idx)">X</button>
@@ -149,7 +167,7 @@
                 <div class="form-group">
                   <label class="form-label">Source Universe</label>
                   <select class="form-select" v-model.number="bulkForm.src_universe">
-                    <option v-for="u in universes" :key="u.id" :value="u.id">{{ u.label }}</option>
+                    <option v-for="u in universes" :key="u.id" :value="u.id">{{ getUniverseLabel(u) }}</option>
                   </select>
                 </div>
                 <div class="form-group">
@@ -165,7 +183,7 @@
                 <div class="form-group">
                   <label class="form-label">Destination Universe</label>
                   <select class="form-select" v-model.number="bulkForm.dst_universe">
-                    <option v-for="u in universes" :key="u.id" :value="u.id">{{ u.label }}</option>
+                    <option v-for="u in universes" :key="u.id" :value="u.id">{{ getUniverseLabel(u) }}</option>
                   </select>
                 </div>
                 <div class="form-group">
@@ -189,13 +207,13 @@
               <div class="visual-control-group">
                 <label>Source Universe</label>
                 <select class="form-select" v-model.number="visualSourceUniverse">
-                  <option v-for="u in universes" :key="u.id" :value="u.id">{{ u.label }}</option>
+                  <option v-for="u in universes" :key="u.id" :value="u.id">{{ getUniverseLabel(u) }}</option>
                 </select>
               </div>
               <div class="visual-control-group">
                 <label>Destination Universe</label>
                 <select class="form-select" v-model.number="visualDestUniverse">
-                  <option v-for="u in universes" :key="u.id" :value="u.id">{{ u.label }}</option>
+                  <option v-for="u in universes" :key="u.id" :value="u.id">{{ getUniverseLabel(u) }}</option>
                 </select>
               </div>
               <div class="visual-control-group">
@@ -263,7 +281,7 @@
                 :key="idx"
                 class="mapping-chip"
               >
-                U{{ m.src_universe }}.{{ m.src_channel }} -> U{{ m.dst_universe }}.{{ m.dst_channel }}
+                {{ getMappingLabel(m.src_universe, m.src_channel) }} -> {{ getMappingLabel(m.dst_universe, m.dst_channel) }}
                 <button class="chip-remove" @click="removeMapping(idx)">&times;</button>
               </span>
               <span v-if="editorForm.mappings.length > 20" class="more-count">
@@ -283,7 +301,7 @@
     </div>
 
     <!-- Delete Confirmation Modal -->
-    <div v-if="deletingMapping" class="modal-overlay" @click.self="deletingMapping = null">
+    <div v-if="deletingMapping" class="modal-overlay">
       <div class="modal">
         <div class="modal-header">
           <h3 class="modal-title">Delete Mapping</h3>
@@ -298,7 +316,7 @@
     </div>
 
     <!-- Help Modal -->
-    <div v-if="showHelp" class="modal-overlay" @click.self="showHelp = false">
+    <div v-if="showHelp" class="modal-overlay">
       <div class="modal" style="max-width: 650px;">
         <div class="modal-header">
           <h3 class="modal-title">How Channel Mapping Works</h3>
@@ -404,6 +422,29 @@ const bulkDstEnd = computed(() => {
   return bulkForm.value.dst_start + range
 })
 
+// Helper function to get universe label with protocol info for dropdowns
+function getUniverseLabel(u) {
+  let label = u.label
+  if (u.input?.input_type === 'artnet_input' && u.input?.config?.artnet_universe !== undefined) {
+    label += ` (Art-Net U${u.input.config.artnet_universe})`
+  } else if (u.input?.input_type === 'sacn_input' && u.input?.config?.sacn_universe !== undefined) {
+    label += ` (sACN U${u.input.config.sacn_universe})`
+  }
+  return label
+}
+
+// Helper function to get mapping label with id prefix and protocol info
+function getMappingLabel(universeId, channel) {
+  const u = universes.value.find(x => x.id === universeId)
+  let protocolLabel = ''
+  if (u?.input?.input_type === 'artnet_input' && u.input?.config?.artnet_universe !== undefined) {
+    protocolLabel = ` (artnet u${u.input.config.artnet_universe})`
+  } else if (u?.input?.input_type === 'sacn_input' && u.input?.config?.sacn_universe !== undefined) {
+    protocolLabel = ` (sacn u${u.input.config.sacn_universe})`
+  }
+  return `id${universeId}.${channel}${protocolLabel}`
+}
+
 async function fetchWithAuth(url, options = {}) {
   options.headers = {
     ...options.headers,
@@ -446,14 +487,12 @@ function createNewMapping() {
 }
 
 function editMapping(mapping) {
-  console.log('editMapping called with:', JSON.stringify(mapping, null, 2))
   editingMapping.value = mapping
   editorForm.value = {
     name: mapping.name,
     unmapped_behavior: mapping.unmapped_behavior,
     mappings: [...mapping.mappings]
   }
-  console.log('editorForm.unmapped_behavior set to:', editorForm.value.unmapped_behavior)
   editMode.value = 'table'
   showEditor.value = true
 }
@@ -473,8 +512,6 @@ async function saveMapping() {
       unmapped_behavior: editorForm.value.unmapped_behavior,
       mappings: editorForm.value.mappings
     }
-
-    console.log('Saving mapping with payload:', JSON.stringify(payload, null, 2))
 
     const url = editingMapping.value
       ? `/api/mapping/${editingMapping.value.id}`
@@ -514,8 +551,7 @@ async function toggleMapping(mapping) {
 async function syncMapping() {
   try {
     const response = await fetchWithAuth('/api/mapping/sync', { method: 'POST' })
-    const data = await response.json()
-    console.log('Sync result:', data)
+    await response.json()
     await loadMappings()
   } catch (e) {
     console.error('Failed to sync mapping:', e)
@@ -544,8 +580,10 @@ function addMapping() {
   editorForm.value.mappings.push({
     src_universe: defaultUniverse,
     src_channel: 1,
+    dst_target_type: 'channel',
     dst_universe: defaultUniverse,
-    dst_channel: 1
+    dst_channel: 1,
+    dst_target_universe_id: defaultUniverse
   })
 }
 
@@ -557,6 +595,18 @@ function clearAllMappings() {
   editorForm.value.mappings = []
 }
 
+function onTargetTypeChange(mapping) {
+  // Reset destination fields when target type changes
+  const defaultUniverse = universes.value[0]?.id || 1
+  if (mapping.dst_target_type === 'channel') {
+    mapping.dst_universe = mapping.dst_universe || defaultUniverse
+    mapping.dst_channel = mapping.dst_channel || 1
+  } else if (mapping.dst_target_type === 'universe_master') {
+    mapping.dst_target_universe_id = mapping.dst_target_universe_id || defaultUniverse
+  }
+  // global_master doesn't need any additional fields
+}
+
 // Bulk editor functions
 function applyBulkMapping() {
   const rangeSize = bulkForm.value.src_end - bulkForm.value.src_start + 1
@@ -564,6 +614,7 @@ function applyBulkMapping() {
     editorForm.value.mappings.push({
       src_universe: bulkForm.value.src_universe,
       src_channel: bulkForm.value.src_start + i,
+      dst_target_type: 'channel',
       dst_universe: bulkForm.value.dst_universe,
       dst_channel: bulkForm.value.dst_start + i
     })
@@ -825,6 +876,35 @@ onMounted(() => {
 .mapping-table td select {
   width: 100%;
   min-width: 80px;
+}
+
+.mapping-table .target-type-select {
+  min-width: 130px;
+}
+
+.mapping-table .dest-cell {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.mapping-table .dest-universe {
+  flex: 1;
+  min-width: 100px;
+}
+
+.mapping-table .dest-channel {
+  width: 70px;
+  min-width: 70px;
+  flex: 0 0 70px;
+}
+
+.mapping-table .global-master-label {
+  color: #f59e0b;
+  font-weight: 500;
+  padding: 8px 12px;
+  background: rgba(245, 158, 11, 0.1);
+  border-radius: 4px;
 }
 
 /* Bulk editor */

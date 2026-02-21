@@ -60,7 +60,12 @@ def create_profile_token(profile: Profile, expires_delta: Optional[timedelta] = 
         "sub": str(profile.id),
         "profile_name": profile.name,
         "allowed_pages": profile.allowed_pages,
-        "is_admin": profile.is_admin
+        "allowed_grids": profile.allowed_grids,
+        "allowed_scenes": profile.allowed_scenes,
+        "is_admin": profile.is_admin,
+        "can_park": profile.can_park if profile.can_park is not None else True,
+        "can_highlight": profile.can_highlight if profile.can_highlight is not None else True,
+        "can_bypass": profile.can_bypass if profile.can_bypass is not None else True
     }
     # Use shorter expiration if profile has no IP addresses (password-only login)
     if expires_delta:
@@ -172,7 +177,11 @@ async def get_current_user(
                 "profile_id": payload.get("sub"),
                 "profile_name": payload.get("profile_name", "Unknown"),
                 "allowed_pages": payload.get("allowed_pages", []),
-                "is_admin": payload.get("is_admin", False)
+                "allowed_grids": payload.get("allowed_grids"),
+                "is_admin": payload.get("is_admin", False),
+                "can_park": payload.get("can_park", True),
+                "can_highlight": payload.get("can_highlight", True),
+                "can_bypass": payload.get("can_bypass", True)
             }
 
     # Check if any profile has this IP configured
@@ -185,7 +194,11 @@ async def get_current_user(
             "profile_id": ip_profile.id,
             "profile_name": ip_profile.name,
             "allowed_pages": ip_profile.allowed_pages,
-            "is_admin": ip_profile.is_admin
+            "allowed_grids": ip_profile.allowed_grids,
+            "is_admin": ip_profile.is_admin,
+            "can_park": ip_profile.can_park if ip_profile.can_park is not None else True,
+            "can_highlight": ip_profile.can_highlight if ip_profile.can_highlight is not None else True,
+            "can_bypass": ip_profile.can_bypass if ip_profile.can_bypass is not None else True
         }
 
     # Legacy: Check old IP whitelist - grants full admin access
@@ -197,7 +210,11 @@ async def get_current_user(
             "profile_id": None,
             "profile_name": "Admin",
             "allowed_pages": ["faders", "scenes", "fixtures", "patch", "io", "groups", "settings"],
-            "is_admin": True
+            "allowed_grids": None,  # null = all grids (admin has full access)
+            "is_admin": True,
+            "can_park": True,
+            "can_highlight": True,
+            "can_bypass": True
         }
 
     raise HTTPException(

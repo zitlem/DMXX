@@ -13,30 +13,56 @@
       <table class="data-table">
         <thead>
           <tr>
+            <th class="drag-col"></th>
             <th>Name</th>
             <th><span class="hide-mobile">Manufacturer</span><span class="show-mobile">Manuf</span></th>
             <th>Channels</th>
             <th>Actions</th>
           </tr>
         </thead>
-        <tbody>
-          <tr v-for="fixture in dmxStore.fixtures" :key="fixture.id">
-            <td>{{ fixture.name }}</td>
-            <td>{{ fixture.manufacturer || '-' }}</td>
-            <td>{{ fixture.channel_count }}</td>
-            <td class="action-buttons">
-              <button class="btn btn-small btn-secondary" @click="viewFixture(fixture)">View</button>
-              <button class="btn btn-small btn-secondary" @click="editFixture(fixture)">Edit</button>
-              <button class="btn btn-small btn-secondary" @click="confirmDuplicate(fixture)">Duplicate</button>
-              <button class="btn btn-small btn-danger" @click="confirmDelete(fixture)">Delete</button>
-            </td>
-          </tr>
-          <tr v-if="dmxStore.fixtures.length === 0">
-            <td colspan="4" style="text-align: center; color: var(--text-secondary);">
-              No fixtures in library. Create a fixture or import from Open Fixture Library.
-            </td>
-          </tr>
-        </tbody>
+        <draggable
+          v-model="dmxStore.fixtures"
+          tag="tbody"
+          item-key="id"
+          :animation="200"
+          ghost-class="fixture-row-ghost"
+          drag-class="fixture-row-dragging"
+          handle=".drag-handle"
+          :delay="150"
+          :delay-on-touch-only="true"
+          :touch-start-threshold="5"
+          filter=".action-buttons"
+          :prevent-on-filter="false"
+          @end="onDragEnd"
+        >
+          <template #item="{ element: fixture }">
+            <tr>
+              <td class="drag-handle">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                  <circle cx="9" cy="6" r="2"/><circle cx="15" cy="6" r="2"/>
+                  <circle cx="9" cy="12" r="2"/><circle cx="15" cy="12" r="2"/>
+                  <circle cx="9" cy="18" r="2"/><circle cx="15" cy="18" r="2"/>
+                </svg>
+              </td>
+              <td>{{ fixture.name }}</td>
+              <td>{{ fixture.manufacturer || '-' }}</td>
+              <td>{{ fixture.channel_count }}</td>
+              <td class="action-buttons">
+                <button class="btn btn-small btn-secondary" @click="viewFixture(fixture)">View</button>
+                <button class="btn btn-small btn-secondary" @click="editFixture(fixture)">Edit</button>
+                <button class="btn btn-small btn-secondary" @click="confirmDuplicate(fixture)">Duplicate</button>
+                <button class="btn btn-small btn-danger" @click="confirmDelete(fixture)">Delete</button>
+              </td>
+            </tr>
+          </template>
+          <template #footer>
+            <tr v-if="dmxStore.fixtures.length === 0">
+              <td colspan="5" style="text-align: center; color: var(--text-secondary);">
+                No fixtures in library. Create a fixture or import from Open Fixture Library.
+              </td>
+            </tr>
+          </template>
+        </draggable>
       </table>
     </div>
 
@@ -198,6 +224,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import draggable from 'vuedraggable'
 import { useDmxStore } from '../stores/dmx.js'
 import { useAuthStore } from '../stores/auth.js'
 
@@ -213,21 +240,64 @@ const editingFixtureId = ref(null)
 
 // Color name to hex mapping for auto-suggest
 const colorMap = {
+  // Primary colors
   red: '#ff0000',
   green: '#00ff00',
   blue: '#0000ff',
-  white: '#ffffff',
-  amber: '#ffbf00',
+
+  // Secondary colors
+  yellow: '#ffff00',
   cyan: '#00ffff',
   magenta: '#ff00ff',
-  yellow: '#ffff00',
-  uv: '#8b00ff',
-  ultraviolet: '#8b00ff',
+
+  // Purple/Violet family
+  purple: '#9900ff',
+  violet: '#8b00ff',
+  indigo: '#4b0082',
+  lavender: '#b794f6',
+
+  // White/Neutral
+  white: '#ffffff',
   warm: '#ffd700',
   cool: '#87ceeb',
+  cto: '#ff9933',
+  ctb: '#6699ff',
+
+  // Common fixture colors
+  amber: '#ffbf00',
   orange: '#ff8000',
   pink: '#ff69b4',
-  lime: '#32cd32'
+  lime: '#32cd32',
+  teal: '#008080',
+  aqua: '#00ffff',
+  turquoise: '#40e0d0',
+
+  // Stage lighting gels/colors
+  congo: '#003366',
+  rose: '#ff007f',
+  coral: '#ff7f50',
+  gold: '#ffd700',
+  salmon: '#fa8072',
+  peach: '#ffcba4',
+  steel: '#4682b4',
+  cobalt: '#0047ab',
+
+  // Deep/saturated colors
+  crimson: '#dc143c',
+  scarlet: '#ff2400',
+  burgundy: '#800020',
+  maroon: '#800000',
+  fuchsia: '#ff00ff',
+  chartreuse: '#7fff00',
+
+  // UV/Effects
+  uv: '#8b00ff',
+  ultraviolet: '#8b00ff',
+  blacklight: '#8b00ff',
+
+  // Additional useful
+  fire: '#ff4500',
+  ice: '#a5f2f3'
 }
 
 const defaultFixture = () => ({
@@ -245,6 +315,29 @@ const canCreate = computed(() => {
 onMounted(async () => {
   await dmxStore.loadFixtures()
 })
+
+async function onDragEnd(event) {
+  // Only process if position actually changed
+  if (event.oldIndex === event.newIndex) return
+
+  // Extract ordered IDs from the fixtures array
+  const orderedIds = dmxStore.fixtures.map(f => f.id)
+
+  try {
+    await fetch('/api/fixtures/reorder', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authStore.getAuthHeaders()
+      },
+      body: JSON.stringify({ fixture_ids: orderedIds })
+    })
+  } catch (e) {
+    console.error('Failed to reorder fixtures:', e)
+    // Reload fixtures to restore server state on error
+    await dmxStore.loadFixtures()
+  }
+}
 
 function addChannel() {
   newFixture.value.channels.push({ name: '', type: 'intensity', color: '#888888', faderName: '' })
@@ -399,9 +492,54 @@ function confirmDuplicate(fixture) {
 </script>
 
 <style scoped>
+/* Drag-and-drop styles */
+.fixture-row-ghost {
+  opacity: 0.4;
+  background: var(--bg-secondary);
+}
+
+.fixture-row-dragging {
+  opacity: 0.9;
+  background: var(--bg-tertiary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Drag handle column */
+.drag-col {
+  width: 36px;
+}
+
+.drag-handle {
+  width: 36px;
+  padding: 8px !important;
+  cursor: grab;
+  color: var(--text-secondary);
+  text-align: center;
+  touch-action: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-handle svg {
+  opacity: 0.4;
+  transition: opacity 0.2s;
+}
+
+.drag-handle:hover svg,
+tr:hover .drag-handle svg {
+  opacity: 0.8;
+}
+
 .action-buttons {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+  touch-action: manipulation;
+}
+
+.action-buttons .btn {
+  touch-action: manipulation;
 }
 </style>

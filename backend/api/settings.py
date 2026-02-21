@@ -77,7 +77,8 @@ DEFAULT_SETTINGS = {
     "default_transition_duration": "0",
     "dmx_refresh_rate": "40",  # Hz
     "websocket_update_rate": "30",  # Hz
-    "theme": DEFAULT_THEME
+    "theme": DEFAULT_THEME,
+    "global_master_fader_color": "#f59e0b"  # Gold/amber default for global master
 }
 
 

@@ -547,4 +547,46 @@ async function copyNewCreatedTokenUrl() {
   padding: 2px 6px;
   background: var(--bg-primary);
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  /* Hide Last Used column (4th column) */
+  .data-table th:nth-child(4),
+  .data-table td:nth-child(4) {
+    display: none;
+  }
+
+  .action-cell {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .action-cell .btn {
+    padding: 4px 6px;
+    font-size: 10px;
+  }
+
+  .truncate-cell {
+    max-width: 60px;
+  }
+
+  .token-type-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+  }
+
+  .example code {
+    font-size: 10px;
+    overflow-x: auto;
+  }
+
+  .token-actions {
+    flex-wrap: wrap;
+  }
+
+  .token-actions .btn {
+    font-size: 11px;
+    padding: 6px 10px;
+  }
+}
 </style>

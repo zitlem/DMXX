@@ -142,11 +142,20 @@ class ArtNetInput(DMXInput):
 
             loop = asyncio.get_event_loop()
 
-            # Create datagram endpoint with proper asyncio integration
+            # Create socket manually for cross-platform compatibility
+            # Windows doesn't support reuse_port parameter in create_datagram_endpoint
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except (AttributeError, OSError):
+                pass  # Windows doesn't have SO_REUSEPORT
+            sock.bind((bind_ip, port))
+            sock.setblocking(False)
+
             self._transport, self._protocol = await loop.create_datagram_endpoint(
                 lambda: ArtNetProtocol(self),
-                local_addr=(bind_ip, port),
-                reuse_port=True
+                sock=sock
             )
 
             self._running = True
@@ -314,8 +323,20 @@ class SACNInput(DMXInput):
                 sock.bind(('', self.SACN_PORT))
 
                 # Join multicast group
-                mreq = struct.pack("4s4s", socket.inet_aton(mcast_addr), socket.inet_aton(bind_ip))
-                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                if bind_ip == "0.0.0.0":
+                    # Join on all interfaces when bind_ip is 0.0.0.0
+                    # This fixes Windows picking the wrong interface on multi-homed systems
+                    for local_ip in LOCAL_IPS:
+                        if local_ip not in ('127.0.0.1', '::1') and ':' not in local_ip:  # Skip loopback and IPv6
+                            try:
+                                mreq = struct.pack("4s4s", socket.inet_aton(mcast_addr), socket.inet_aton(local_ip))
+                                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+                                logger.debug(f"Joined multicast {mcast_addr} on interface {local_ip}")
+                            except OSError:
+                                pass  # Interface might not support multicast
+                else:
+                    mreq = struct.pack("4s4s", socket.inet_aton(mcast_addr), socket.inet_aton(bind_ip))
+                    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
                 sock.setblocking(False)
 
                 self._transport, self._protocol = await loop.create_datagram_endpoint(
@@ -325,12 +346,23 @@ class SACNInput(DMXInput):
 
                 mode = f"multicast {mcast_addr}"
             else:
-                # Unicast - use create_datagram_endpoint directly
+                # Unicast - create socket manually for cross-platform compatibility
+                # Windows doesn't support reuse_port parameter in create_datagram_endpoint
                 self._multicast_addr = None
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except (AttributeError, OSError):
+                    pass  # Windows doesn't have SO_REUSEPORT
+                # On Windows, binding to empty string works better than "0.0.0.0" for receiving unicast
+                actual_bind = '' if bind_ip == "0.0.0.0" else bind_ip
+                sock.bind((actual_bind, self.SACN_PORT))
+                sock.setblocking(False)
+
                 self._transport, self._protocol = await loop.create_datagram_endpoint(
                     lambda: SACNProtocol(self),
-                    local_addr=(bind_ip, self.SACN_PORT),
-                    reuse_port=True
+                    sock=sock
                 )
                 mode = f"unicast {bind_ip}"
 
@@ -409,6 +441,53 @@ class SACNInput(DMXInput):
         }
 
 
+class MIDIInput(DMXInput):
+    """
+    MIDI input for a specific universe.
+
+    This is a lightweight wrapper that registers a universe for MIDI input.
+    The actual MIDI device handling is done by MIDIHandler in dmx_interface.
+    CC mappings in the database determine which CCs map to which channels.
+    """
+
+    def __init__(self, universe_id: int, config: dict, callback: Callable[[int, List[int]], None]):
+        super().__init__(universe_id, config, callback)
+        self._device_name = config.get("device_name", "")
+        # Buffer for input channel values (512 channels)
+        self._channel_values = [0] * 512
+
+    async def start(self) -> bool:
+        """Mark this universe as having MIDI input enabled."""
+        self._running = True
+        logger.info(f"MIDI input started for universe {self.universe_id} (device: {self._device_name or 'any'})")
+        return True
+
+    async def stop(self) -> None:
+        """Stop MIDI input for this universe."""
+        self._running = False
+        logger.info(f"MIDI input stopped for universe {self.universe_id}")
+
+    def get_status(self) -> dict:
+        """Return status information about this MIDI input."""
+        return {
+            "type": "midi",
+            "universe_id": self.universe_id,
+            "device_name": self._device_name,
+            "running": self._running
+        }
+
+    def set_channel(self, channel: int, value: int) -> None:
+        """Set a channel value and trigger callback."""
+        if 1 <= channel <= 512:
+            self._channel_values[channel - 1] = value
+            # Send full 512 channels to callback (like other inputs)
+            self.callback(self.universe_id, self._channel_values.copy())
+
+    def get_device_name(self) -> str:
+        """Get the configured MIDI device name."""
+        return self._device_name
+
+
 def create_input(universe_id: int, input_type: str, config: dict, callback: Callable[[int, List[int]], None]) -> Optional[DMXInput]:
     """Factory function to create the appropriate input for a device type."""
 
@@ -419,6 +498,9 @@ def create_input(universe_id: int, input_type: str, config: dict, callback: Call
 
     elif input_type == "sacn_input" or input_type == "sacn" or input_type == "e131":
         return SACNInput(universe_id, config, callback)
+
+    elif input_type == "midi_input" or input_type == "midi":
+        return MIDIInput(universe_id, config, callback)
 
     elif input_type == "none" or input_type == "":
         return None
@@ -461,6 +543,14 @@ def get_available_input_protocols() -> List[dict]:
                 "source_ip": {"type": "string", "default": "", "description": "Only accept from this IP (whitelist, empty = all)"},
                 "ignore_ip": {"type": "string", "default": "", "description": "Ignore packets from this IP (blacklist)"},
                 "ignore_self": {"type": "boolean", "default": False, "description": "Ignore packets from this machine (loopback prevention)"}
+            }
+        },
+        {
+            "id": "midi_input",
+            "name": "MIDI",
+            "available": True,
+            "config_schema": {
+                "device_name": {"type": "string", "default": "", "description": "MIDI device name (empty = any connected device)"}
             }
         }
     ]

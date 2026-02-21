@@ -40,7 +40,6 @@ class WebSocketManager {
       this.ws = new WebSocket(url)
 
       this.ws.onopen = () => {
-        console.log('WebSocket connected')
         this.connected.value = true
         this.reconnectAttempts = 0  // Reset on successful connection
 
@@ -49,7 +48,6 @@ class WebSocketManager {
       }
 
       this.ws.onclose = (event) => {
-        console.log('WebSocket disconnected', event.code, event.reason)
         this.connected.value = false
         this.ws = null
         this.scheduleReconnect()
@@ -102,8 +100,6 @@ class WebSocketManager {
       this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
       this.maxReconnectDelay
     )
-
-    console.log(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`)
 
     this.reconnectTimeout = setTimeout(() => {
       this.reconnectTimeout = null
@@ -162,12 +158,10 @@ class WebSocketManager {
       case 'input_to_ui':
         // Input values for fader display (when passthrough show_ui is enabled)
         this.setInputValues(data.universe_id, data.values)
-        // Mark channels with non-zero values as coming from input
+        // Mark all channels as coming from input (including zeros)
         const values = data.values
         for (let i = 0; i < values.length; i++) {
-          if (values[i] > 0) {
-            this.setChannelSource(data.universe_id, i + 1, 'input')
-          }
+          this.setChannelSource(data.universe_id, i + 1, 'input')
         }
         this.emit('input_to_ui', data)
         break
@@ -181,6 +175,18 @@ class WebSocketManager {
 
       case 'active_scene_changed':
         this.emit('active_scene_changed', data)
+        break
+
+      case 'input_bypass_changed':
+        this.emit('input_bypass_changed', data)
+        break
+
+      case 'highlight_update':
+        this.emit('highlight_update', data)
+        break
+
+      case 'park_update':
+        this.emit('park_update', data)
         break
 
       default:

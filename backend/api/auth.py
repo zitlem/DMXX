@@ -9,6 +9,7 @@ from ..auth import (
     add_ip_to_whitelist, remove_ip_from_whitelist, get_whitelist,
     get_current_user, get_client_ip, optional_auth, require_admin, verify_password
 )
+from ..config import AVAILABLE_PAGES
 
 router = APIRouter()
 
@@ -22,7 +23,12 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     profile_name: str
     allowed_pages: List[str]
+    allowed_grids: Optional[List[int]]
+    allowed_scenes: Optional[List[int]]
     is_admin: bool
+    can_park: bool
+    can_highlight: bool
+    can_bypass: bool
 
 
 class IPRequest(BaseModel):
@@ -45,7 +51,12 @@ async def login(request: LoginRequest, db: Session = Depends(get_db)):
         access_token=access_token,
         profile_name=profile.name,
         allowed_pages=profile.allowed_pages,
-        is_admin=profile.is_admin
+        allowed_grids=profile.allowed_grids,
+        allowed_scenes=profile.allowed_scenes,
+        is_admin=profile.is_admin,
+        can_park=profile.can_park if profile.can_park is not None else True,
+        can_highlight=profile.can_highlight if profile.can_highlight is not None else True,
+        can_bypass=profile.can_bypass if profile.can_bypass is not None else True
     )
 
 
@@ -65,7 +76,12 @@ async def auth_status(
             "ip": client_ip,
             "profile_name": user.get("profile_name"),
             "allowed_pages": user.get("allowed_pages", []),
-            "is_admin": user.get("is_admin", False)
+            "allowed_grids": user.get("allowed_grids"),
+            "allowed_scenes": user.get("allowed_scenes"),
+            "is_admin": user.get("is_admin", False),
+            "can_park": user.get("can_park", True),
+            "can_highlight": user.get("can_highlight", True),
+            "can_bypass": user.get("can_bypass", True)
         }
 
     return {
@@ -122,7 +138,12 @@ class ProfileCreate(BaseModel):
     password: Optional[str] = None
     ip_addresses: Optional[List[str]] = None
     allowed_pages: List[str]
+    allowed_grids: Optional[List[int]] = None
+    allowed_scenes: Optional[List[int]] = None
     is_admin: bool = False
+    can_park: bool = True
+    can_highlight: bool = True
+    can_bypass: bool = True
 
 
 class ProfileUpdate(BaseModel):
@@ -130,7 +151,12 @@ class ProfileUpdate(BaseModel):
     password: Optional[str] = None
     ip_addresses: Optional[List[str]] = None
     allowed_pages: Optional[List[str]] = None
+    allowed_grids: Optional[List[int]] = None
+    allowed_scenes: Optional[List[int]] = None
     is_admin: Optional[bool] = None
+    can_park: Optional[bool] = None
+    can_highlight: Optional[bool] = None
+    can_bypass: Optional[bool] = None
 
 
 class ProfileResponse(BaseModel):
@@ -139,7 +165,12 @@ class ProfileResponse(BaseModel):
     has_password: bool
     ip_addresses: Optional[List[str]]
     allowed_pages: List[str]
+    allowed_grids: Optional[List[int]]
+    allowed_scenes: Optional[List[int]]
     is_admin: bool
+    can_park: bool
+    can_highlight: bool
+    can_bypass: bool
 
 
 @router.get("/profiles", response_model=List[ProfileResponse])
@@ -156,7 +187,12 @@ async def list_profiles(
             has_password=bool(p.password),
             ip_addresses=p.ip_addresses,
             allowed_pages=p.allowed_pages,
-            is_admin=p.is_admin
+            allowed_grids=p.allowed_grids,
+            allowed_scenes=p.allowed_scenes,
+            is_admin=p.is_admin,
+            can_park=p.can_park if p.can_park is not None else True,
+            can_highlight=p.can_highlight if p.can_highlight is not None else True,
+            can_bypass=p.can_bypass if p.can_bypass is not None else True
         )
         for p in profiles
     ]
@@ -204,7 +240,12 @@ async def create_profile(
         password=data.password,
         ip_addresses=data.ip_addresses,
         allowed_pages=data.allowed_pages,
-        is_admin=data.is_admin
+        allowed_grids=data.allowed_grids,
+        allowed_scenes=data.allowed_scenes,
+        is_admin=data.is_admin,
+        can_park=data.can_park,
+        can_highlight=data.can_highlight,
+        can_bypass=data.can_bypass
     )
     db.add(profile)
     db.commit()
@@ -216,7 +257,12 @@ async def create_profile(
         has_password=bool(profile.password),
         ip_addresses=profile.ip_addresses,
         allowed_pages=profile.allowed_pages,
-        is_admin=profile.is_admin
+        allowed_grids=profile.allowed_grids,
+        allowed_scenes=profile.allowed_scenes,
+        is_admin=profile.is_admin,
+        can_park=profile.can_park if profile.can_park is not None else True,
+        can_highlight=profile.can_highlight if profile.can_highlight is not None else True,
+        can_bypass=profile.can_bypass if profile.can_bypass is not None else True
     )
 
 
@@ -268,6 +314,12 @@ async def update_profile(
     if data.allowed_pages is not None:
         profile.allowed_pages = data.allowed_pages
 
+    if data.allowed_grids is not None:
+        profile.allowed_grids = data.allowed_grids if data.allowed_grids else None
+
+    if data.allowed_scenes is not None:
+        profile.allowed_scenes = data.allowed_scenes if data.allowed_scenes else None
+
     if data.is_admin is not None:
         # Prevent removing last admin
         if not data.is_admin and profile.is_admin:
@@ -278,6 +330,15 @@ async def update_profile(
                     detail="Cannot remove last admin profile"
                 )
         profile.is_admin = data.is_admin
+
+    if data.can_park is not None:
+        profile.can_park = data.can_park
+
+    if data.can_highlight is not None:
+        profile.can_highlight = data.can_highlight
+
+    if data.can_bypass is not None:
+        profile.can_bypass = data.can_bypass
 
     # Validate that profile still has at least one auth method
     if not profile.password and not profile.ip_addresses:
@@ -295,7 +356,12 @@ async def update_profile(
         has_password=bool(profile.password),
         ip_addresses=profile.ip_addresses,
         allowed_pages=profile.allowed_pages,
-        is_admin=profile.is_admin
+        allowed_grids=profile.allowed_grids,
+        allowed_scenes=profile.allowed_scenes,
+        is_admin=profile.is_admin,
+        can_park=profile.can_park if profile.can_park is not None else True,
+        can_highlight=profile.can_highlight if profile.can_highlight is not None else True,
+        can_bypass=profile.can_bypass if profile.can_bypass is not None else True
     )
 
 
@@ -330,14 +396,4 @@ async def delete_profile(
 @router.get("/pages")
 async def list_available_pages():
     """List all available pages for profile configuration."""
-    return {
-        "pages": [
-            {"id": "faders", "name": "Faders"},
-            {"id": "scenes", "name": "Scenes"},
-            {"id": "fixtures", "name": "Fixtures"},
-            {"id": "patch", "name": "Patch"},
-            {"id": "io", "name": "I/O"},
-            {"id": "groups", "name": "Groups"},
-            {"id": "settings", "name": "Settings"}
-        ]
-    }
+    return {"pages": AVAILABLE_PAGES}
