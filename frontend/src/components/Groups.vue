@@ -47,6 +47,7 @@
             <input type="checkbox" v-model="editMode">
             <span>Edit Mode</span>
           </label>
+          <button class="btn btn-secondary" @click="openTextEditor">Text Edit</button>
           <button class="btn btn-primary" @click="openNewGroupModal">+ Add Group</button>
         </div>
       </div>
@@ -94,6 +95,7 @@
             <span>Edit Mode</span>
           </label>
           <button class="btn btn-secondary" @click="openNewGridModal">+ Add Grid</button>
+          <button class="btn btn-secondary" @click="openTextEditor">Text Edit</button>
           <button class="btn btn-primary" @click="openNewGroupModal">+ Add Group</button>
         </div>
       </div>
@@ -417,6 +419,12 @@
                 <h4>Members ({{ selectedGroup.members?.length || 0 }})</h4>
                 <div class="members-header-buttons">
                   <button
+                    v-if="editForm.mode === 'proportional'"
+                    class="btn btn-small btn-secondary base-mode-toggle"
+                    @click="baseValueMode = baseValueMode === 'raw' ? 'percent' : 'raw'"
+                    :title="baseValueMode === 'raw' ? 'Switch to percentage' : 'Switch to DMX values'"
+                  >{{ baseValueMode === 'raw' ? '0-255' : '%' }}</button>
+                  <button
                     v-if="editForm.mode === 'proportional' && selectedGroup.members?.length > 0"
                     class="btn btn-small btn-secondary"
                     @click="showBulkBaseEdit = true"
@@ -427,8 +435,8 @@
 
               <!-- Bulk Base Edit Control -->
               <div v-if="showBulkBaseEdit && editForm.mode === 'proportional'" class="bulk-base-edit">
-                <label>Set all base values to:</label>
-                <input type="number" class="form-input" v-model.number="bulkBaseValue" min="0" max="255">
+                <label>Set all base values to{{ baseValueMode === 'percent' ? ' (%)' : '' }}:</label>
+                <input type="number" class="form-input" v-model.number="bulkBaseValue" min="0" :max="baseMax()">
                 <button class="btn btn-small btn-primary" @click="applyBulkBaseValue">Apply</button>
                 <button class="btn btn-small btn-secondary" @click="showBulkBaseEdit = false">Cancel</button>
               </div>
@@ -465,8 +473,8 @@
                   class="form-input"
                   v-model.number="newMember.base_value"
                   min="0"
-                  max="255"
-                  placeholder="Base"
+                  :max="baseMax()"
+                  :placeholder="baseValueMode === 'percent' ? '%' : 'Base'"
                 >
                 <select
                   v-if="editForm.mode === 'color_mixer'"
@@ -513,7 +521,7 @@
                       class="form-input member-base-input"
                       v-model.number="editMemberValue"
                       min="0"
-                      max="255"
+                      :max="baseMax()"
                       @blur="saveMemberEdit(member)"
                       @keyup.enter="saveMemberEdit(member)"
                       @keyup.escape="cancelMemberEdit"
@@ -523,7 +531,7 @@
                       class="member-base editable"
                       @click="startMemberEdit(member)"
                       title="Click to edit"
-                    >@{{ member.base_value }}</span>
+                    >@{{ baseValueMode === 'percent' ? rawToPercent(member.base_value) + '%' : member.base_value }}</span>
                   </template>
                   <template v-if="editForm.mode === 'color_mixer'">
                     <select
@@ -710,8 +718,8 @@
               </select>
             </div>
             <div class="form-group" v-if="editForm.mode === 'proportional'">
-              <label class="form-label">Base Value</label>
-              <input type="number" class="form-input" v-model.number="bulkAdd.base_value" min="0" max="255">
+              <label class="form-label">Base Value{{ baseValueMode === 'percent' ? ' (%)' : '' }}</label>
+              <input type="number" class="form-input" v-model.number="bulkAdd.base_value" min="0" :max="baseMax()">
             </div>
           </div>
 
@@ -886,6 +894,42 @@
         </div>
       </div>
     </div>
+    <!-- Text Editor Modal -->
+    <div v-if="showTextEditor" class="modal-overlay">
+      <div class="modal modal-text-editor">
+        <div class="modal-header">
+          <h3 class="modal-title">Text Editor</h3>
+          <button class="modal-close" @click="showTextEditor = false">&times;</button>
+        </div>
+
+        <div class="text-editor-controls">
+          <button
+            class="btn btn-small btn-secondary"
+            @click="toggleTextEditorMode"
+          >{{ textEditorMode === 'raw' ? '0-255' : '%' }}</button>
+          <span class="text-editor-hint">
+            === Grid &nbsp; [Group] &nbsp; Label ↵ Ch/Value
+          </span>
+        </div>
+
+        <textarea
+          class="text-editor-textarea"
+          v-model="textEditorContent"
+          rows="20"
+          spellcheck="false"
+        ></textarea>
+
+        <div v-if="textEditorSummary" class="text-editor-summary">{{ textEditorSummary }}</div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" @click="showTextEditor = false">Cancel</button>
+          <button type="button" class="btn btn-primary" @click="previewTextEditorChanges" :disabled="textEditorApplying">
+            <span v-if="textEditorApplying" class="spinner-inline"></span>
+            {{ textEditorApplying ? 'Applying...' : 'Apply' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1023,6 +1067,48 @@ const newMember = ref({
 // Inline member editing
 const editingMember = ref(null)  // member.id being edited
 const editMemberValue = ref(255) // temp value during edit
+
+// Base value display mode: 'raw' (0-255) or 'percent' (0-100%)
+const baseValueMode = ref('raw')
+
+function rawToPercent(val) {
+  return Math.round((val / 255) * 100)
+}
+
+function percentToRaw(pct) {
+  return Math.round((pct / 100) * 255)
+}
+
+function toDisplayValue(raw) {
+  return baseValueMode.value === 'percent' ? rawToPercent(raw) : raw
+}
+
+function toRawValue(display) {
+  return baseValueMode.value === 'percent' ? percentToRaw(display) : display
+}
+
+function baseMax() {
+  return baseValueMode.value === 'percent' ? 100 : 255
+}
+
+// Text editor for bulk editing
+const showTextEditor = ref(false)
+const textEditorContent = ref('')
+const textEditorSummary = ref('')
+const textEditorMode = ref('raw')  // separate from baseValueMode, persists between opens
+const textEditorApplying = ref(false)
+
+function teDisplayValue(raw) {
+  return textEditorMode.value === 'percent' ? rawToPercent(raw) : raw
+}
+
+function teRawValue(display) {
+  return textEditorMode.value === 'percent' ? percentToRaw(display) : display
+}
+
+function normName(s) {
+  return s.trim().replace(/\s+/g, ' ')
+}
 
 // Bulk base value editing
 const showBulkBaseEdit = ref(false)
@@ -1565,7 +1651,7 @@ async function addMember() {
         target_type: 'channel',
         universe_id: newMember.value.universe_id,
         channel: channel,
-        base_value: newMember.value.base_value,
+        base_value: Math.max(0, Math.min(255, toRawValue(newMember.value.base_value))),
         color_role: newMember.value.color_role || null
       }
 
@@ -1589,7 +1675,7 @@ async function addMember() {
     // Handle universe_master and global_master (single add)
     const memberData = {
       target_type: targetType,
-      base_value: newMember.value.base_value,
+      base_value: Math.max(0, Math.min(255, toRawValue(newMember.value.base_value))),
       color_role: newMember.value.color_role || null
     }
 
@@ -1630,7 +1716,7 @@ async function removeMember(member) {
 // Inline member editing
 function startMemberEdit(member) {
   editingMember.value = member.id
-  editMemberValue.value = member.base_value
+  editMemberValue.value = toDisplayValue(member.base_value)
   nextTick(() => {
     const input = document.querySelector('.member-base-input')
     if (input) input.focus()
@@ -1644,7 +1730,8 @@ function cancelMemberEdit() {
 async function saveMemberEdit(member) {
   if (editingMember.value !== member.id) return
 
-  const newValue = Math.max(0, Math.min(255, editMemberValue.value))
+  const rawInput = toRawValue(editMemberValue.value)
+  const newValue = Math.max(0, Math.min(255, rawInput))
   if (newValue === member.base_value) {
     editingMember.value = null
     return
@@ -1698,7 +1785,8 @@ async function updateMemberColorRole(member, colorRole) {
 async function applyBulkBaseValue() {
   if (!selectedGroup.value?.members?.length) return
 
-  const value = Math.max(0, Math.min(255, bulkBaseValue.value))
+  const rawInput = toRawValue(bulkBaseValue.value)
+  const value = Math.max(0, Math.min(255, rawInput))
 
   try {
     for (const member of selectedGroup.value.members) {
@@ -1735,7 +1823,7 @@ function getMemberLabel(member) {
 async function openBulkAddModal() {
   if (!selectedGroup.value) return
   bulkAdd.value.universe_id = universes.value[0]?.id || 1
-  bulkAdd.value.base_value = 255
+  bulkAdd.value.base_value = baseValueMode.value === 'percent' ? 100 : 255
   selectedChannels.value = new Set()
   lastClickedChannel.value = null
   showBulkAdd.value = true
@@ -1752,6 +1840,557 @@ function closeBulkAddModal() {
   showBulkAdd.value = false
   selectedChannels.value = new Set()
   isDraggingChannels.value = false
+}
+
+// ---- Text Editor ----
+
+const CHANNEL_RE = /^(?:U(\d+)\.)?(\d+)\/(\d+)$/
+
+function serializeGroupsToText() {
+  const lines = []
+  for (const grid of grids.value) {
+    if (lines.length > 0) lines.push('')
+    lines.push(`=== ${grid.name}`)
+    const groups = grid.groups || []
+    for (let gi = 0; gi < groups.length; gi++) {
+      const group = groups[gi]
+      if (gi > 0) lines.push('')
+      lines.push(`[${group.name}] ${group.mode}`)
+      for (const member of (group.members || [])) {
+        if (member.target_type === 'universe_master') {
+          lines.push(`# U${member.target_universe_id} Master`)
+          continue
+        }
+        if (member.target_type === 'global_master') {
+          lines.push('# Global Master')
+          continue
+        }
+        const label = dmxStore.getChannelLabel(member.universe_id, member.channel)
+        const isDefault = !label || label === `Ch ${member.channel}`
+        if (!isDefault) lines.push(label)
+        const val = teDisplayValue(member.base_value)
+        lines.push(`U${member.universe_id}.${member.channel}/${val}`)
+      }
+    }
+  }
+  return lines.join('\n')
+}
+
+function openTextEditor() {
+  // Ensure channel labels are loaded for all universes in use
+  const uids = new Set()
+  for (const grid of grids.value) {
+    for (const group of (grid.groups || [])) {
+      for (const member of (group.members || [])) {
+        if (member.universe_id) uids.add(member.universe_id)
+      }
+    }
+  }
+  Promise.all([...uids].map(uid => dmxStore.loadChannelLabels(uid))).then(() => {
+    textEditorContent.value = serializeGroupsToText()
+    textEditorSummary.value = ''
+    showTextEditor.value = true
+  })
+}
+
+function toggleTextEditorMode() {
+  // Re-parse current content, switch mode, re-serialize values
+  const lines = textEditorContent.value.split('\n')
+  const oldMode = textEditorMode.value
+  textEditorMode.value = oldMode === 'raw' ? 'percent' : 'raw'
+
+  const newLines = lines.map(line => {
+    const m = line.match(CHANNEL_RE)
+    if (!m) return line
+    const uid = m[1] || ''
+    const ch = parseInt(m[2])
+    const oldVal = parseInt(m[3])
+    // Convert old display value to raw, then to new display
+    const raw = oldMode === 'percent' ? percentToRaw(oldVal) : oldVal
+    const newVal = textEditorMode.value === 'percent' ? rawToPercent(raw) : raw
+    const prefix = uid ? `U${uid}.` : ''
+    return `${prefix}${ch}/${newVal}`
+  })
+  textEditorContent.value = newLines.join('\n')
+}
+
+function parseTextEditor() {
+  const lines = textEditorContent.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const parsed = []
+  let currentGrid = null
+  let currentGroup = null
+  let currentGroupMode = 'proportional'
+  let pendingLabel = null
+  const errors = []
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line) {
+      pendingLabel = null
+      continue
+    }
+
+    // Comment line (master targets)
+    if (line.startsWith('#')) continue
+
+    // Grid header
+    const gridMatch = line.match(/^===\s+(.+)$/)
+    if (gridMatch) {
+      currentGrid = normName(gridMatch[1])
+      currentGroup = null
+      pendingLabel = null
+      continue
+    }
+
+    // Group header: [Name] or [Name] mode
+    const groupMatch = line.match(/^\[(.+)\]\s*(\w+)?$/)
+    if (groupMatch) {
+      currentGroup = normName(groupMatch[1])
+      currentGroupMode = groupMatch[2] || 'proportional'
+      pendingLabel = null
+      continue
+    }
+
+    // Channel definition
+    const chMatch = line.match(CHANNEL_RE)
+    if (chMatch) {
+      if (!currentGroup) {
+        errors.push(`Line ${i + 1}: channel without a group`)
+        pendingLabel = null
+        continue
+      }
+      const universe_id = chMatch[1] ? parseInt(chMatch[1]) : null
+      const channel = parseInt(chMatch[2])
+      const displayVal = parseInt(chMatch[3])
+      const base_value = teRawValue(displayVal)
+
+      parsed.push({
+        gridName: normName(currentGrid || (grids.value[0]?.name || 'Default')),
+        groupName: normName(currentGroup),
+        mode: currentGroupMode,
+        universe_id: universe_id || 1,
+        channel,
+        base_value: Math.max(0, Math.min(255, base_value)),
+        label: pendingLabel
+      })
+      pendingLabel = null
+      continue
+    }
+
+    // Otherwise it's a label line
+    pendingLabel = line
+  }
+
+  return { parsed, errors }
+}
+
+async function previewTextEditorChanges() {
+  try {
+  const { parsed, errors } = parseTextEditor()
+
+  if (errors.length > 0) {
+    alert('Syntax errors:\n' + errors.join('\n'))
+    return
+  }
+
+  // Build lookup of existing members
+  const existing = new Map() // key: "gridName|groupName|uid|ch" -> {member, group, grid}
+  const existingGroups = new Map() // key: "gridName|groupName" -> group
+  const existingGrids = new Map() // key: gridName -> grid
+
+  for (const grid of grids.value) {
+    const gn = normName(grid.name)
+    existingGrids.set(gn, grid)
+    for (const group of (grid.groups || [])) {
+      const gpn = normName(group.name)
+      existingGroups.set(`${gn}|${gpn}`, group)
+      for (const member of (group.members || [])) {
+        if (member.target_type === 'channel') {
+          const key = `${gn}|${gpn}|${member.universe_id}|${member.channel}`
+          existing.set(key, { member, group, grid })
+        }
+      }
+    }
+  }
+
+  // Build desired set
+  const desired = new Set()
+  const toAdd = []
+  const toUpdate = []
+  const toUpdateLabels = []
+  const newGroups = new Set()
+  const newGrids = new Set()
+  const groupModes = new Map() // key: "gridName|groupName" -> mode
+
+  for (const entry of parsed) {
+    const key = `${entry.gridName}|${entry.groupName}|${entry.universe_id}|${entry.channel}`
+    desired.add(key)
+
+    const groupKey = `${entry.gridName}|${entry.groupName}`
+    if (!groupModes.has(groupKey)) {
+      groupModes.set(groupKey, entry.mode)
+    }
+
+    if (!existingGrids.has(entry.gridName)) {
+      newGrids.add(entry.gridName)
+    }
+    if (!existingGroups.has(groupKey)) {
+      newGroups.add(groupKey)
+    }
+
+    const ex = existing.get(key)
+    if (ex) {
+      // Account for round-trip rounding when in % mode (e.g. 127→50%→128)
+      if (ex.member.base_value !== entry.base_value &&
+          teRawValue(teDisplayValue(ex.member.base_value)) !== entry.base_value) {
+        toUpdate.push({ member: ex.member, group: ex.group, base_value: entry.base_value })
+      }
+    } else {
+      toAdd.push(entry)
+    }
+
+    if (entry.label !== null) {
+      const currentLabel = dmxStore.getChannelLabel(entry.universe_id, entry.channel)
+      const isDefault = !currentLabel || currentLabel === `Ch ${entry.channel}`
+      if ((isDefault && entry.label) || (!isDefault && entry.label !== currentLabel)) {
+        toUpdateLabels.push(entry)
+      }
+    }
+  }
+
+  // Members to delete: existing channel members not in desired set
+  const toDelete = []
+  for (const [key, val] of existing) {
+    if (!desired.has(key)) {
+      toDelete.push(val)
+    }
+  }
+
+  // Parse all grid and group headers from text for deletion detection
+  const parsedGridKeys = new Set()
+  const parsedGroupKeys = new Set()
+  {
+    let cGrid = null
+    for (const line of textEditorContent.value.split('\n')) {
+      const l = line.trim()
+      const gm = l.match(/^===\s+(.+)$/)
+      if (gm) { cGrid = normName(gm[1]); parsedGridKeys.add(cGrid); continue }
+      const grm = l.match(/^\[(.+)\]\s*(\w+)?$/)
+      if (grm && cGrid) {
+        const gKey = `${cGrid}|${normName(grm[1])}`
+        parsedGroupKeys.add(gKey)
+        if (!groupModes.has(gKey)) {
+          groupModes.set(gKey, grm[2] || 'proportional')
+        }
+      }
+    }
+  }
+
+  // Groups to delete: header removed from text
+  const groupsToDelete = []
+  for (const [key, group] of existingGroups) {
+    if (!parsedGroupKeys.has(key)) {
+      groupsToDelete.push(group)
+    }
+  }
+
+  // Grids to delete: === header removed from text (and not referenced by any new group)
+  const gridsToDelete = []
+  for (const [name, grid] of existingGrids) {
+    if (!parsedGridKeys.has(name)) {
+      gridsToDelete.push(grid)
+    }
+  }
+
+  // Also detect new grids from headers (not just from parsed channel entries)
+  for (const gridName of parsedGridKeys) {
+    if (!existingGrids.has(gridName)) {
+      newGrids.add(gridName)
+    }
+  }
+
+  // Check if group order changed
+  const existingGroupOrder = []
+  for (const grid of grids.value) {
+    for (const group of (grid.groups || [])) {
+      existingGroupOrder.push(`${normName(grid.name)}|${normName(group.name)}`)
+    }
+  }
+  const parsedGroupOrder = []
+  const seenOrder = new Set()
+  for (const entry of parsed) {
+    const gKey = `${entry.gridName}|${entry.groupName}`
+    if (!seenOrder.has(gKey)) { seenOrder.add(gKey); parsedGroupOrder.push(gKey) }
+  }
+  for (const gKey of parsedGroupKeys) {
+    if (!seenOrder.has(gKey)) { seenOrder.add(gKey); parsedGroupOrder.push(gKey) }
+  }
+  const groupsReordered = existingGroupOrder.length === parsedGroupOrder.length &&
+    existingGroupOrder.some((key, i) => key !== parsedGroupOrder[i])
+
+  // Check if member order changed within any group
+  let membersReordered = false
+  const parsedMembersByGroup = new Map()
+  for (const entry of parsed) {
+    const gKey = `${entry.gridName}|${entry.groupName}`
+    if (!parsedMembersByGroup.has(gKey)) parsedMembersByGroup.set(gKey, [])
+    parsedMembersByGroup.get(gKey).push(`${entry.universe_id}|${entry.channel}`)
+  }
+  for (const grid of grids.value) {
+    const gn = normName(grid.name)
+    for (const group of (grid.groups || [])) {
+      const gpn = normName(group.name)
+      const gKey = `${gn}|${gpn}`
+      const parsedMembers = parsedMembersByGroup.get(gKey)
+      if (!parsedMembers) continue
+      const existingMembers = (group.members || [])
+        .filter(m => m.target_type === 'channel' || !m.target_type)
+        .map(m => `${m.universe_id}|${m.channel}`)
+      if (existingMembers.length === parsedMembers.length &&
+          existingMembers.some((key, i) => key !== parsedMembers[i])) {
+        membersReordered = true
+        break
+      }
+    }
+    if (membersReordered) break
+  }
+
+  // Show summary
+  const parts = []
+  if (groupsReordered) parts.push('groups reordered')
+  if (membersReordered) parts.push('members reordered')
+  if (newGrids.size > 0) parts.push(`${newGrids.size} new grid(s)`)
+  if (newGroups.size > 0) parts.push(`${newGroups.size} new group(s)`)
+  if (toAdd.length > 0) parts.push(`${toAdd.length} member(s) to add`)
+  if (toUpdate.length > 0) parts.push(`${toUpdate.length} member(s) to update`)
+  if (toDelete.length > 0) parts.push(`${toDelete.length} member(s) to delete`)
+  if (groupsToDelete.length > 0) parts.push(`${groupsToDelete.length} group(s) to delete`)
+  if (gridsToDelete.length > 0) parts.push(`${gridsToDelete.length} grid(s) to delete`)
+  if (toUpdateLabels.length > 0) parts.push(`${toUpdateLabels.length} label(s) to update`)
+
+  if (parts.length === 0) {
+    textEditorSummary.value = 'No changes detected.'
+    return
+  }
+
+  const summary = parts.join(', ')
+  if (!confirm(`Apply changes?\n${summary}`)) return
+
+  textEditorApplying.value = true
+  await applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdateLabels, newGrids, newGroups, groupsToDelete, gridsToDelete, groupModes, parsedGroupKeys)
+  } catch (e) {
+    console.error('[TextEditor] previewTextEditorChanges error:', e)
+    alert('Text editor error: ' + e.message)
+  } finally {
+    textEditorApplying.value = false
+  }
+}
+
+async function applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdateLabels, newGrids, newGroups, groupsToDelete, gridsToDelete, groupModes, parsedGroupKeys) {
+  try {
+    // 1. Create new grids
+    const gridIdByName = new Map()
+    for (const grid of grids.value) {
+      gridIdByName.set(grid.name, grid.id)
+    }
+    for (const gridName of newGrids) {
+      const resp = await fetchWithAuth('/api/groups/grids', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: gridName })
+      })
+      if (resp.ok) {
+        const data = await resp.json()
+        gridIdByName.set(gridName, data.id)
+      }
+    }
+
+    // 2. Create new groups
+    const groupIdByKey = new Map()
+    for (const grid of grids.value) {
+      for (const group of (grid.groups || [])) {
+        groupIdByKey.set(`${normName(grid.name)}|${normName(group.name)}`, group.id)
+      }
+    }
+    for (const groupKey of newGroups) {
+      const [gridName, groupName] = groupKey.split('|')
+      const gridId = gridIdByName.get(gridName)
+      if (!gridId) continue
+      const resp = await fetchWithAuth('/api/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: groupName, mode: groupModes?.get(groupKey) || 'proportional', enabled: true, grid_id: gridId })
+      })
+      if (resp.ok) {
+        const data = await resp.json()
+        groupIdByKey.set(groupKey, data.id)
+      }
+    }
+
+    // 3. Delete removed groups (header removed from text)
+    for (const group of groupsToDelete) {
+      await fetchWithAuth(`/api/groups/${group.id}`, { method: 'DELETE' })
+    }
+
+    // 3b. Delete removed grids (=== header removed from text)
+    for (const grid of gridsToDelete) {
+      await fetchWithAuth(`/api/groups/grids/${grid.id}`, { method: 'DELETE' })
+    }
+
+    // 4. Sync members per group: delete all channel members, re-add in text order
+    const entriesByGroup = new Map()
+    for (const entry of parsed) {
+      const gKey = `${entry.gridName}|${entry.groupName}`
+      if (!entriesByGroup.has(gKey)) entriesByGroup.set(gKey, [])
+      entriesByGroup.get(gKey).push(entry)
+    }
+
+    for (const [gKey, entries] of entriesByGroup) {
+      const groupId = groupIdByKey.get(gKey)
+      if (!groupId) continue
+
+      // Find existing channel members for this group
+      let channelMembers = []
+      for (const grid of grids.value) {
+        for (const group of (grid.groups || [])) {
+          if (group.id === groupId)
+            channelMembers = (group.members || []).filter(m => m.target_type === 'channel' || !m.target_type)
+        }
+      }
+
+      // Check if membership and order are identical
+      const sameStructure = channelMembers.length === entries.length &&
+        channelMembers.every((m, i) => m.universe_id === entries[i].universe_id && m.channel === entries[i].channel)
+
+      if (sameStructure) {
+        // Only update values that actually changed (batched)
+        const updates = []
+        for (let i = 0; i < entries.length; i++) {
+          if (channelMembers[i].base_value !== entries[i].base_value) {
+            updates.push({ member: channelMembers[i], base_value: entries[i].base_value })
+          }
+        }
+        if (updates.length > 0) {
+          await Promise.allSettled(updates.map(({ member, base_value }) =>
+            fetchWithAuth(`/api/groups/${groupId}/members/${member.id}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ universe_id: member.universe_id, channel: member.channel, base_value, color_role: member.color_role })
+            })
+          ))
+        }
+      } else {
+        // Structure changed: delete all channel members + recreate in text order
+        if (channelMembers.length > 0) {
+          await Promise.allSettled(
+            channelMembers.map(m =>
+              fetchWithAuth(`/api/groups/${groupId}/members/${m.id}`, { method: 'DELETE' })
+            )
+          )
+        }
+        for (const entry of entries) {
+          await fetchWithAuth(`/api/groups/${groupId}/members`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              target_type: 'channel',
+              universe_id: entry.universe_id,
+              channel: entry.channel,
+              base_value: entry.base_value
+            })
+          })
+        }
+      }
+    }
+
+    // Also delete channel members from groups in text that have NO entries (empty groups keep non-channel members)
+    for (const gKey of parsedGroupKeys || []) {
+      if (!entriesByGroup.has(gKey)) {
+        const groupId = groupIdByKey.get(gKey)
+        if (!groupId) continue
+        let existingMembers = []
+        for (const grid of grids.value) {
+          for (const group of (grid.groups || [])) {
+            if (group.id === groupId) existingMembers = group.members || []
+          }
+        }
+        const channelMembers = existingMembers.filter(m => m.target_type === 'channel' || !m.target_type)
+        if (channelMembers.length > 0) {
+          await Promise.allSettled(
+            channelMembers.map(m =>
+              fetchWithAuth(`/api/groups/${groupId}/members/${m.id}`, { method: 'DELETE' })
+            )
+          )
+        }
+      }
+    }
+
+    // 6. Update labels (batched)
+    await Promise.allSettled(toUpdateLabels.filter(e => e.label).map(entry =>
+      fetchWithAuth('/api/patch/labels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          universe_id: entry.universe_id,
+          channel: entry.channel,
+          label: entry.label
+        })
+      })
+    ))
+
+    // 7. Reorder groups to match text order
+    await loadGrids()  // reload to get fresh IDs (including newly created groups)
+
+    const orderedGroupIds = []
+    const seenGroupKeys = new Set()
+
+    // First, collect groups in order from parsed channel entries
+    for (const entry of parsed) {
+      const gKey = `${entry.gridName}|${entry.groupName}`
+      if (!seenGroupKeys.has(gKey)) {
+        seenGroupKeys.add(gKey)
+        for (const grid of grids.value) {
+          if (normName(grid.name) === entry.gridName) {
+            const grp = (grid.groups || []).find(g => normName(g.name) === entry.groupName)
+            if (grp) orderedGroupIds.push(grp.id)
+          }
+        }
+      }
+    }
+
+    // Also include empty groups (header present but no channels) in text order
+    if (parsedGroupKeys) {
+      for (const gKey of parsedGroupKeys) {
+        if (!seenGroupKeys.has(gKey)) {
+          seenGroupKeys.add(gKey)
+          const parts = gKey.split('|')
+          const gridName = parts[0]
+          const groupName = parts.slice(1).join('|')
+          for (const grid of grids.value) {
+            if (normName(grid.name) === gridName) {
+              const grp = (grid.groups || []).find(g => normName(g.name) === groupName)
+              if (grp) orderedGroupIds.push(grp.id)
+            }
+          }
+        }
+      }
+    }
+
+    if (orderedGroupIds.length > 0) {
+      await fetchWithAuth('/api/groups/reorder', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group_ids: orderedGroupIds })
+      })
+    }
+
+  } catch (e) {
+    console.error('Text editor apply failed:', e)
+    alert('Failed to apply changes: ' + e.message)
+  } finally {
+    await loadGrids()
+    showTextEditor.value = false
+  }
 }
 
 function isChannelInGroup(universeId, channel) {
@@ -1885,10 +2524,11 @@ function clearSelection() {
 async function addBulkMembers() {
   if (!selectedGroup.value || selectedChannels.value.size === 0) return
 
+  const rawBase = Math.max(0, Math.min(255, toRawValue(bulkAdd.value.base_value)))
   const members = Array.from(selectedChannels.value).map(ch => ({
     universe_id: bulkAdd.value.universe_id,
     channel: ch,
-    base_value: bulkAdd.value.base_value
+    base_value: rawBase
   }))
 
   try {
@@ -1905,8 +2545,15 @@ async function addBulkMembers() {
       const allGroups = grids.value.flatMap(g => g.groups || [])
       selectedGroup.value = allGroups.find(g => g.id === selectedGroup.value.id)
     } else {
-      const error = await response.json()
-      alert('Failed to add members: ' + (error.detail || 'Unknown error'))
+      const text = await response.text()
+      let detail = `HTTP ${response.status}`
+      try {
+        const error = JSON.parse(text)
+        detail = error.detail || detail
+      } catch {
+        detail = text || detail
+      }
+      alert('Failed to add members: ' + detail)
     }
   } catch (e) {
     console.error('Failed to add bulk members:', e)
@@ -2824,7 +3471,8 @@ function isGroupHighlighted(groupId) {
   background: var(--bg-tertiary);
   border: 2px solid var(--border);
   border-radius: 8px;
-  min-width: 70px;
+  width: 80px;
+  min-width: 80px;
   cursor: pointer;
   transition: all 0.15s;
   position: relative;
@@ -2892,10 +3540,10 @@ function isGroupHighlighted(groupId) {
 }
 
 .group-name {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   text-align: center;
-  max-width: 60px;
+  max-width: 66px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3293,7 +3941,6 @@ function isGroupHighlighted(groupId) {
   border-radius: 8px;
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 200px);
 }
 
 .edit-panel-header {
@@ -3406,6 +4053,11 @@ function isGroupHighlighted(groupId) {
 .members-header-buttons {
   display: flex;
   gap: 4px;
+}
+
+.base-mode-toggle {
+  min-width: 48px;
+  font-family: monospace;
 }
 
 .bulk-base-edit {
@@ -3537,6 +4189,65 @@ function isGroupHighlighted(groupId) {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+
+/* Text Editor Modal */
+.modal-text-editor {
+  width: 90vw;
+  max-width: 700px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.text-editor-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.text-editor-hint {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-family: monospace;
+}
+
+.text-editor-textarea {
+  width: 100%;
+  font-family: monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text);
+  resize: vertical;
+  tab-size: 2;
+  box-sizing: border-box;
+}
+
+.text-editor-summary {
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.spinner-inline {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* Bulk Add Modal */
@@ -3791,7 +4502,8 @@ function isGroupHighlighted(groupId) {
   }
 
   .group-fader {
-    min-width: 60px;
+    width: 70px;
+    min-width: 70px;
   }
 
   .fader-track {
