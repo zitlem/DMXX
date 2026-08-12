@@ -1,6 +1,5 @@
 """Fixture library API endpoints."""
 import json
-import os
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
@@ -11,8 +10,6 @@ from ..auth import get_current_user
 from ..websocket_manager import manager
 
 router = APIRouter()
-
-FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "fixtures")
 
 
 class CreateFixtureRequest(BaseModel):

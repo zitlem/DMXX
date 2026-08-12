@@ -2174,7 +2174,31 @@ async function previewTextEditorChanges() {
   }
 
   const summary = parts.join(', ')
-  if (!confirm(`Apply changes?\n${summary}`)) return
+
+  // Groups are matched by name, so renaming a grid or a group reads as
+  // "delete the old one, create a new one" - and the new one gets a new id.
+  // Scenes store group ids (SceneGroupValue.group_id is deliberately not a
+  // foreign key), so any scene holding a master value for a deleted group
+  // silently loses it on recall, and remote-API tokens for it are removed.
+  // Spell that out rather than letting a rename quietly break saved shows.
+  if (groupsToDelete.length > 0 || gridsToDelete.length > 0) {
+    const names = [
+      ...gridsToDelete.map(g => `  grid  "${g.name}"`),
+      ...groupsToDelete.map(g => `  group "${g.name}"`)
+    ]
+    const shown = names.slice(0, 15).join('\n')
+    const more = names.length > 15 ? `\n  ...and ${names.length - 15} more` : ''
+    const warning =
+      `This will DELETE:\n${shown}${more}\n\n` +
+      'Saved scenes that store a master value for a deleted group will ' +
+      'silently lose it, and any remote-API tokens for it are removed.\n\n' +
+      'If you meant to RENAME something, cancel and rename it in the group ' +
+      'editor instead - renaming here deletes and recreates it.\n\n' +
+      `Other changes: ${summary}\n\nContinue?`
+    if (!confirm(warning)) return
+  } else if (!confirm(`Apply changes?\n${summary}`)) {
+    return
+  }
 
   textEditorApplying.value = true
   await applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdateLabels, newGrids, newGroups, groupsToDelete, gridsToDelete, groupModes, parsedGroupKeys)
@@ -2187,21 +2211,59 @@ async function previewTextEditorChanges() {
 }
 
 async function applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdateLabels, newGrids, newGroups, groupsToDelete, gridsToDelete, groupModes, parsedGroupKeys) {
+  // Every write is recorded here. The apply is not transactional - it is a
+  // sequence of REST calls - so a failure part-way can leave a group with
+  // members missing. Reporting exactly what failed is what makes that
+  // recoverable, so no request result is discarded.
+  const failures = []
+
+  async function write(description, url, options) {
+    try {
+      const resp = await fetchWithAuth(url, options)
+      if (!resp.ok) {
+        let detail = `HTTP ${resp.status}`
+        try {
+          const body = await resp.json()
+          if (body?.detail) detail = body.detail
+        } catch (e) { /* non-json error body */ }
+        failures.push(`${description}: ${detail}`)
+        return null
+      }
+      return resp
+    } catch (e) {
+      failures.push(`${description}: ${e.message}`)
+      return null
+    }
+  }
+
+  /** Run writes concurrently, recording every rejection. */
+  async function writeAll(items, describe, toRequest) {
+    const results = await Promise.allSettled(items.map(toRequest))
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        failures.push(`${describe(items[i])}: ${result.reason?.message || result.reason}`)
+      }
+    })
+  }
+
   try {
     // 1. Create new grids
     const gridIdByName = new Map()
     for (const grid of grids.value) {
-      gridIdByName.set(grid.name, grid.id)
+      // Key by the normalised name: newGrids/newGroups keys are normalised, so
+      // a grid stored with irregular whitespace would otherwise never be found
+      // here and every group destined for it would be silently skipped.
+      gridIdByName.set(normName(grid.name), grid.id)
     }
     for (const gridName of newGrids) {
-      const resp = await fetchWithAuth('/api/groups/grids', {
+      const resp = await write(`create grid "${gridName}"`, '/api/groups/grids', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: gridName })
       })
-      if (resp.ok) {
+      if (resp) {
         const data = await resp.json()
-        gridIdByName.set(gridName, data.id)
+        gridIdByName.set(normName(gridName), data.id)
       }
     }
 
@@ -2215,13 +2277,16 @@ async function applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdat
     for (const groupKey of newGroups) {
       const [gridName, groupName] = groupKey.split('|')
       const gridId = gridIdByName.get(gridName)
-      if (!gridId) continue
-      const resp = await fetchWithAuth('/api/groups', {
+      if (!gridId) {
+        failures.push(`create group "${groupName}": grid "${gridName}" is missing`)
+        continue
+      }
+      const resp = await write(`create group "${groupName}"`, '/api/groups', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: groupName, mode: groupModes?.get(groupKey) || 'proportional', enabled: true, grid_id: gridId })
       })
-      if (resp.ok) {
+      if (resp) {
         const data = await resp.json()
         groupIdByKey.set(groupKey, data.id)
       }
@@ -2229,12 +2294,12 @@ async function applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdat
 
     // 3. Delete removed groups (header removed from text)
     for (const group of groupsToDelete) {
-      await fetchWithAuth(`/api/groups/${group.id}`, { method: 'DELETE' })
+      await write(`delete group "${group.name}"`, `/api/groups/${group.id}`, { method: 'DELETE' })
     }
 
     // 3b. Delete removed grids (=== header removed from text)
     for (const grid of gridsToDelete) {
-      await fetchWithAuth(`/api/groups/grids/${grid.id}`, { method: 'DELETE' })
+      await write(`delete grid "${grid.name}"`, `/api/groups/grids/${grid.id}`, { method: 'DELETE' })
     }
 
     // 4. Sync members per group: delete all channel members, re-add in text order
@@ -2271,25 +2336,29 @@ async function applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdat
           }
         }
         if (updates.length > 0) {
-          await Promise.allSettled(updates.map(({ member, base_value }) =>
-            fetchWithAuth(`/api/groups/${groupId}/members/${member.id}`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ universe_id: member.universe_id, channel: member.channel, base_value, color_role: member.color_role })
-            })
-          ))
+          await writeAll(updates,
+            ({ member }) => `update U${member.universe_id}.${member.channel}`,
+            ({ member, base_value }) => write(
+              `update U${member.universe_id}.${member.channel}`,
+              `/api/groups/${groupId}/members/${member.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ universe_id: member.universe_id, channel: member.channel, base_value, color_role: member.color_role })
+              }))
         }
       } else {
         // Structure changed: delete all channel members + recreate in text order
         if (channelMembers.length > 0) {
-          await Promise.allSettled(
-            channelMembers.map(m =>
-              fetchWithAuth(`/api/groups/${groupId}/members/${m.id}`, { method: 'DELETE' })
-            )
-          )
+          await writeAll(channelMembers,
+            (m) => `remove U${m.universe_id}.${m.channel}`,
+            (m) => write(`remove U${m.universe_id}.${m.channel}`,
+                         `/api/groups/${groupId}/members/${m.id}`, { method: 'DELETE' }))
         }
+        // Members were just removed; a failure here loses them, so each
+        // re-add is checked individually.
         for (const entry of entries) {
-          await fetchWithAuth(`/api/groups/${groupId}/members`, {
+          await write(`re-add U${entry.universe_id}.${entry.channel}`,
+                      `/api/groups/${groupId}/members`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -2316,18 +2385,20 @@ async function applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdat
         }
         const channelMembers = existingMembers.filter(m => m.target_type === 'channel' || !m.target_type)
         if (channelMembers.length > 0) {
-          await Promise.allSettled(
-            channelMembers.map(m =>
-              fetchWithAuth(`/api/groups/${groupId}/members/${m.id}`, { method: 'DELETE' })
-            )
-          )
+          await writeAll(channelMembers,
+            (m) => `clear U${m.universe_id}.${m.channel}`,
+            (m) => write(`clear U${m.universe_id}.${m.channel}`,
+                         `/api/groups/${groupId}/members/${m.id}`, { method: 'DELETE' }))
         }
       }
     }
 
     // 6. Update labels (batched)
-    await Promise.allSettled(toUpdateLabels.filter(e => e.label).map(entry =>
-      fetchWithAuth('/api/patch/labels', {
+    const labelUpdates = toUpdateLabels.filter(e => e.label)
+    await writeAll(labelUpdates,
+      (entry) => `label U${entry.universe_id}.${entry.channel}`,
+      (entry) => write(`label U${entry.universe_id}.${entry.channel}`,
+                       '/api/patch/labels', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2335,8 +2406,7 @@ async function applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdat
           channel: entry.channel,
           label: entry.label
         })
-      })
-    ))
+      }))
 
     // 7. Reorder groups to match text order
     await loadGrids()  // reload to get fresh IDs (including newly created groups)
@@ -2377,7 +2447,7 @@ async function applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdat
     }
 
     if (orderedGroupIds.length > 0) {
-      await fetchWithAuth('/api/groups/reorder', {
+      await write('reorder groups', '/api/groups/reorder', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ group_ids: orderedGroupIds })
@@ -2386,10 +2456,25 @@ async function applyTextEditorChanges(parsed, toAdd, toUpdate, toDelete, toUpdat
 
   } catch (e) {
     console.error('Text editor apply failed:', e)
-    alert('Failed to apply changes: ' + e.message)
+    failures.push(`unexpected error: ${e.message}`)
   } finally {
     await loadGrids()
-    showTextEditor.value = false
+
+    if (failures.length > 0) {
+      // The apply is not atomic, so a partial failure has already changed
+      // some state. Say exactly what failed and keep the editor open with the
+      // user's text intact so they can retry.
+      console.error('[TextEditor] failures:', failures)
+      const shown = failures.slice(0, 12).join('\n')
+      const more = failures.length > 12 ? `\n...and ${failures.length - 12} more` : ''
+      alert(
+        `${failures.length} change(s) could not be applied.\n\n${shown}${more}\n\n` +
+        'Everything else was applied. The editor still holds your text - ' +
+        'reopen it to see the current state before retrying.'
+      )
+    } else {
+      showTextEditor.value = false
+    }
   }
 }
 

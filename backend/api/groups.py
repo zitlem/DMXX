@@ -12,6 +12,17 @@ from ..websocket_manager import manager
 router = APIRouter()
 
 
+def normalize_name(name: str) -> str:
+    """Collapse whitespace in a grid or group name.
+
+    The text editor in Groups.vue matches grids and groups by name after
+    applying the same normalisation, so storing "Main  Hall" while the client
+    looks up "Main Hall" would make it fail to find the grid. Keeping both
+    sides on one rule avoids that class of mismatch.
+    """
+    return " ".join(name.split())
+
+
 class GroupMemberRequest(BaseModel):
     # For channel targets
     universe_id: Optional[int] = None
@@ -138,7 +149,7 @@ async def create_grid(
         max_pos = -1
 
     grid = GroupGrid(
-        name=request.name.strip(),
+        name=normalize_name(request.name),
         color=request.color,
         position=max_pos + 1
     )
@@ -188,7 +199,7 @@ async def update_grid(
         raise HTTPException(status_code=404, detail="Grid not found")
 
     if request.name is not None:
-        grid.name = request.name.strip()
+        grid.name = normalize_name(request.name)
 
     request_data = request.model_dump(exclude_unset=True)
     if 'color' in request_data:
@@ -295,7 +306,7 @@ async def create_group(
 
     # Create the group
     group = Group(
-        name=request.name.strip(),
+        name=normalize_name(request.name),
         mode=request.mode,
         master_universe=request.master_universe,
         master_channel=request.master_channel,
@@ -355,7 +366,7 @@ async def update_group(
         raise HTTPException(status_code=404, detail="Group not found")
 
     if request.name is not None:
-        group.name = request.name.strip()
+        group.name = normalize_name(request.name)
     if request.mode is not None:
         group.mode = request.mode
     if request.enabled is not None:

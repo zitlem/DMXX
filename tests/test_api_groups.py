@@ -762,3 +762,62 @@ def test_bulk_input_link_rejects_a_range_that_overflows(client):
         "group_ids": groups, "start_universe": 1, "start_channel": 511})
     assert response.status_code == 400
     assert "Not enough channels" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Name normalisation
+#
+# Groups.vue's text editor matches grids and groups by name after collapsing
+# whitespace. The server applies the same rule so the two cannot disagree.
+# ---------------------------------------------------------------------------
+from backend.api.groups import normalize_name
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("  Warm  ", "Warm"),
+    ("Main  Hall", "Main Hall"),
+    ("\tStage\nLeft ", "Stage Left"),
+    ("Front of House", "Front of House"),
+    ("", ""),
+])
+def test_normalize_name(raw, expected):
+    assert normalize_name(raw) == expected
+
+
+def test_group_names_are_normalised_on_create(client, db_session):
+    body = create_group(client, name="  Main   Hall  ")
+
+    assert body["name"] == "Main Hall"
+    assert db_session.query(Group).one().name == "Main Hall"
+
+
+def test_group_names_are_normalised_on_update(client, db_session):
+    group = create_group(client, name="Warm")
+
+    body = client.put(f"/api/groups/{group['id']}",
+                      json={"name": "  Cool   White "}).json()
+
+    assert body["name"] == "Cool White"
+
+
+def test_grid_names_are_normalised_on_create(client, db_session):
+    body = client.post("/api/groups/grids",
+                       json={"name": "  Stage   Left "}).json()
+
+    assert body["name"] == "Stage Left"
+    assert db_session.query(GroupGrid).one().name == "Stage Left"
+
+
+def test_grid_names_are_normalised_on_update(client):
+    grid = client.post("/api/groups/grids", json={"name": "Old"}).json()
+
+    body = client.put(f"/api/groups/grids/{grid['id']}",
+                      json={"name": " New   Name "}).json()
+
+    assert body["name"] == "New Name"
+
+
+def test_a_stored_name_round_trips_through_normalisation(client):
+    """What the server stores must be a fixed point of the same rule."""
+    body = create_group(client, name="  Odd   Spacing  ")
+    assert normalize_name(body["name"]) == body["name"]
