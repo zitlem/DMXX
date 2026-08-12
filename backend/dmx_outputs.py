@@ -65,11 +65,32 @@ class ArtNetOutput(DMXOutput):
         self._channel = None
         self._node_key: Optional[str] = None
 
+    @classmethod
+    async def _release_node(cls, node_key: str) -> None:
+        """Drop one reference to a shared node, closing it once unused.
+
+        Used by stop() and by start()'s failure path - a reference taken by a
+        start() that then raises must be given back, or the node's socket is
+        never closed and later outputs reuse a stale entry.
+        """
+        if node_key not in cls._node_refs:
+            return
+
+        cls._node_refs[node_key] -= 1
+        if cls._node_refs[node_key] > 0:
+            return
+
+        node = cls._shared_nodes.pop(node_key, None)
+        cls._node_refs.pop(node_key, None)
+        if node is not None:
+            await node.__aexit__(None, None, None)
+
     async def start(self) -> bool:
         if not PYARTNET_AVAILABLE:
             logger.error(f"Universe {self.universe_id}: Art-Net not available (pyartnet not installed)")
             return False
 
+        took_reference = False
         try:
             ip = self.config.get("ip", "255.255.255.255")
             port = self.config.get("port", 6454)
@@ -82,6 +103,7 @@ class ArtNetOutput(DMXOutput):
             if self._node_key in ArtNetOutput._shared_nodes:
                 self._node = ArtNetOutput._shared_nodes[self._node_key]
                 ArtNetOutput._node_refs[self._node_key] += 1
+                took_reference = True
             else:
                 # pyartnet 2.0 API: use create() factory method for simpler setup
                 self._node = ArtNetNode.create(ip, port, max_fps=fps, refresh_every=2)
@@ -89,6 +111,7 @@ class ArtNetOutput(DMXOutput):
                 await self._node.__aenter__()
                 ArtNetOutput._shared_nodes[self._node_key] = self._node
                 ArtNetOutput._node_refs[self._node_key] = 1
+                took_reference = True
 
             # Add universe and channel to the node
             universe = self._node.add_universe(artnet_universe)
@@ -100,6 +123,14 @@ class ArtNetOutput(DMXOutput):
 
         except Exception as e:
             logger.error(f"Universe {self.universe_id}: Failed to start Art-Net: {e}")
+            if took_reference and self._node_key:
+                try:
+                    await self._release_node(self._node_key)
+                except Exception as release_error:
+                    logger.error(f"Universe {self.universe_id}: Error releasing Art-Net node: {release_error}")
+            self._node = None
+            self._channel = None
+            self._node_key = None
             return False
 
     async def stop(self) -> None:
@@ -107,15 +138,8 @@ class ArtNetOutput(DMXOutput):
             return
 
         try:
-            if self._node_key and self._node_key in ArtNetOutput._node_refs:
-                ArtNetOutput._node_refs[self._node_key] -= 1
-
-                # Only stop node if no more universes are using it
-                if ArtNetOutput._node_refs[self._node_key] <= 0:
-                    if self._node:
-                        await self._node.__aexit__(None, None, None)
-                    del ArtNetOutput._shared_nodes[self._node_key]
-                    del ArtNetOutput._node_refs[self._node_key]
+            if self._node_key:
+                await self._release_node(self._node_key)
 
             self._running = False
             self._node = None
@@ -157,11 +181,27 @@ class SACNOutput(DMXOutput):
         self._channel = None
         self._node_key: Optional[str] = None
 
+    @classmethod
+    async def _release_node(cls, node_key: str) -> None:
+        """Drop one reference to a shared node, closing it once unused."""
+        if node_key not in cls._node_refs:
+            return
+
+        cls._node_refs[node_key] -= 1
+        if cls._node_refs[node_key] > 0:
+            return
+
+        node = cls._shared_nodes.pop(node_key, None)
+        cls._node_refs.pop(node_key, None)
+        if node is not None:
+            await node.__aexit__(None, None, None)
+
     async def start(self) -> bool:
         if not PYARTNET_AVAILABLE:
             logger.error(f"Universe {self.universe_id}: sACN not available (pyartnet not installed)")
             return False
 
+        took_reference = False
         try:
             sacn_universe = self.config.get("universe", self.universe_id)
             multicast = self.config.get("multicast", True)
@@ -180,6 +220,7 @@ class SACNOutput(DMXOutput):
             if self._node_key in SACNOutput._shared_nodes:
                 self._node = SACNOutput._shared_nodes[self._node_key]
                 SACNOutput._node_refs[self._node_key] += 1
+                took_reference = True
             else:
                 # pyartnet 2.0 SacnNode API - use factory methods
                 if multicast:
@@ -193,6 +234,7 @@ class SACNOutput(DMXOutput):
                 await self._node.__aenter__()
                 SACNOutput._shared_nodes[self._node_key] = self._node
                 SACNOutput._node_refs[self._node_key] = 1
+                took_reference = True
 
             # Add universe and channel
             universe = self._node.add_universe(sacn_universe)
@@ -205,6 +247,14 @@ class SACNOutput(DMXOutput):
 
         except Exception as e:
             logger.error(f"Universe {self.universe_id}: Failed to start sACN: {e}")
+            if took_reference and self._node_key:
+                try:
+                    await self._release_node(self._node_key)
+                except Exception as release_error:
+                    logger.error(f"Universe {self.universe_id}: Error releasing sACN node: {release_error}")
+            self._node = None
+            self._channel = None
+            self._node_key = None
             return False
 
     async def stop(self) -> None:
@@ -212,14 +262,8 @@ class SACNOutput(DMXOutput):
             return
 
         try:
-            if self._node_key and self._node_key in SACNOutput._node_refs:
-                SACNOutput._node_refs[self._node_key] -= 1
-
-                if SACNOutput._node_refs[self._node_key] <= 0:
-                    if self._node:
-                        await self._node.__aexit__(None, None, None)
-                    del SACNOutput._shared_nodes[self._node_key]
-                    del SACNOutput._node_refs[self._node_key]
+            if self._node_key:
+                await self._release_node(self._node_key)
 
             self._running = False
             self._node = None

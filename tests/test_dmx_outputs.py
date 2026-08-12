@@ -178,3 +178,213 @@ def test_network_protocol_availability_tracks_pyartnet():
     for protocol in get_available_protocols():
         if protocol["id"] in ("artnet", "sacn"):
             assert protocol["available"] == dmx_outputs.PYARTNET_AVAILABLE
+
+
+# ---------------------------------------------------------------------------
+# Shared node lifecycle
+#
+# Art-Net and sACN outputs share one pyartnet node per destination and
+# reference-count it. These tests drive that bookkeeping with a fake node, so
+# no socket is opened.
+# ---------------------------------------------------------------------------
+class FakeChannel:
+    def __init__(self):
+        self.values = None
+
+    def set_values(self, values):
+        self.values = values
+
+
+class FakeUniverse:
+    def add_channel(self, start, width):
+        return FakeChannel()
+
+
+class FakeNode:
+    """Stands in for ArtNetNode / SacnNode."""
+
+    created = 0
+    closed = 0
+    fail_add_universe = False
+
+    def __init__(self):
+        self.entered = False
+
+    @classmethod
+    def reset(cls):
+        cls.created = cls.closed = 0
+        cls.fail_add_universe = False
+
+    @classmethod
+    def create(cls, *args, **kwargs):
+        cls.created += 1
+        return cls()
+
+    create_multicast = create
+
+    async def __aenter__(self):
+        self.entered = True
+        return self
+
+    async def __aexit__(self, *exc):
+        type(self).closed += 1
+
+    def add_universe(self, universe):
+        if type(self).fail_add_universe:
+            raise RuntimeError("duplicate universe")
+        return FakeUniverse()
+
+
+@pytest.fixture
+def fake_node(monkeypatch):
+    """Install FakeNode for both output classes and isolate their shared state."""
+    FakeNode.reset()
+    monkeypatch.setattr(dmx_outputs, "PYARTNET_AVAILABLE", True)
+    monkeypatch.setattr(dmx_outputs, "ArtNetNode", FakeNode, raising=False)
+    monkeypatch.setattr(dmx_outputs, "SacnNode", FakeNode, raising=False)
+    for cls in (ArtNetOutput, SACNOutput):
+        monkeypatch.setattr(cls, "_shared_nodes", {})
+        monkeypatch.setattr(cls, "_node_refs", {})
+    return FakeNode
+
+
+@pytest.mark.asyncio
+async def test_outputs_to_the_same_destination_share_one_node(fake_node):
+    a = ArtNetOutput(1, {"ip": "10.0.0.1"})
+    b = ArtNetOutput(2, {"ip": "10.0.0.1"})
+
+    assert await a.start() is True
+    assert await b.start() is True
+
+    assert fake_node.created == 1
+    assert ArtNetOutput._node_refs == {"artnet:10.0.0.1:6454": 2}
+
+
+@pytest.mark.asyncio
+async def test_different_destinations_get_their_own_node(fake_node):
+    await ArtNetOutput(1, {"ip": "10.0.0.1"}).start()
+    await ArtNetOutput(2, {"ip": "10.0.0.2"}).start()
+
+    assert fake_node.created == 2
+    assert len(ArtNetOutput._shared_nodes) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_node_closes_only_when_the_last_output_stops(fake_node):
+    a = ArtNetOutput(1, {"ip": "10.0.0.1"})
+    b = ArtNetOutput(2, {"ip": "10.0.0.1"})
+    await a.start()
+    await b.start()
+
+    await a.stop()
+    assert fake_node.closed == 0                     # b is still using it
+    assert ArtNetOutput._node_refs == {"artnet:10.0.0.1:6454": 1}
+
+    await b.stop()
+    assert fake_node.closed == 1
+    assert ArtNetOutput._shared_nodes == {}
+    assert ArtNetOutput._node_refs == {}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_start_returns_its_reference(fake_node):
+    """Regression: the refcount used to leak, so the node was never closed."""
+    owner = ArtNetOutput(1, {"ip": "10.0.0.1"})
+    await owner.start()
+
+    fake_node.fail_add_universe = True
+    failed = ArtNetOutput(2, {"ip": "10.0.0.1"})
+    assert await failed.start() is False
+    fake_node.fail_add_universe = False
+
+    assert ArtNetOutput._node_refs == {"artnet:10.0.0.1:6454": 1}
+
+    await owner.stop()
+    assert fake_node.closed == 1
+    assert ArtNetOutput._shared_nodes == {}
+
+
+@pytest.mark.asyncio
+async def test_a_failed_first_start_leaves_no_shared_state(fake_node):
+    fake_node.fail_add_universe = True
+    out = ArtNetOutput(1, {"ip": "10.0.0.1"})
+
+    assert await out.start() is False
+
+    assert ArtNetOutput._shared_nodes == {}
+    assert ArtNetOutput._node_refs == {}
+    assert fake_node.closed == 1  # the node it opened was closed again
+
+
+@pytest.mark.asyncio
+async def test_a_failed_start_leaves_the_output_stopped(fake_node):
+    fake_node.fail_add_universe = True
+    out = ArtNetOutput(1, {"ip": "10.0.0.1"})
+    await out.start()
+
+    assert out.running is False
+    await out.send_dmx([255] * 512)   # must not raise
+    await out.stop()                  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_a_started_output_sends_to_its_channel(fake_node):
+    out = ArtNetOutput(1, {"ip": "10.0.0.1"})
+    await out.start()
+
+    values = [7] * 512
+    await out.send_dmx(values)
+    assert out._channel.values == values
+
+
+@pytest.mark.asyncio
+async def test_sacn_shares_and_releases_nodes_the_same_way(fake_node):
+    a = SACNOutput(1, {"multicast": True})
+    b = SACNOutput(2, {"multicast": True})
+    await a.start()
+    await b.start()
+
+    assert SACNOutput._node_refs == {"sacn:multicast": 2}
+
+    await a.stop()
+    assert fake_node.closed == 0
+    await b.stop()
+    assert fake_node.closed == 1
+    assert SACNOutput._shared_nodes == {}
+
+
+@pytest.mark.asyncio
+async def test_sacn_failed_start_returns_its_reference(fake_node):
+    owner = SACNOutput(1, {"multicast": True})
+    await owner.start()
+
+    fake_node.fail_add_universe = True
+    assert await SACNOutput(2, {"multicast": True}).start() is False
+    fake_node.fail_add_universe = False
+
+    assert SACNOutput._node_refs == {"sacn:multicast": 1}
+    await owner.stop()
+    assert SACNOutput._shared_nodes == {}
+
+
+@pytest.mark.asyncio
+async def test_sacn_unicast_targets_are_keyed_separately(fake_node):
+    await SACNOutput(1, {"multicast": False, "unicast_ip": "10.0.0.1"}).start()
+    await SACNOutput(2, {"multicast": False, "unicast_ip": "10.0.0.2"}).start()
+
+    assert set(SACNOutput._shared_nodes) == {"sacn:unicast:10.0.0.1",
+                                             "sacn:unicast:10.0.0.2"}
+
+
+@pytest.mark.asyncio
+async def test_stopping_twice_does_not_double_release(fake_node):
+    a = ArtNetOutput(1, {"ip": "10.0.0.1"})
+    b = ArtNetOutput(2, {"ip": "10.0.0.1"})
+    await a.start()
+    await b.start()
+
+    await a.stop()
+    await a.stop()          # second call is a no-op: not running any more
+
+    assert ArtNetOutput._node_refs == {"artnet:10.0.0.1:6454": 1}
+    assert fake_node.closed == 0

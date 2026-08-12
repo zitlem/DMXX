@@ -72,6 +72,14 @@ fixed:
   `POST /api/midi/input/disconnect` returned 500 every time. Guarded by
   `test_stop_midi_input_forwards_the_device_name` and
   `test_disconnect_a_named_device`.
+- **Leaked shared-node reference.** Art-Net/sACN outputs reference-count one
+  pyartnet node per destination. A `start()` that failed *after* taking a
+  reference (e.g. pyartnet rejecting a duplicate universe) returned `False`
+  without giving it back, so the node's socket was never closed and
+  `_shared_nodes` kept a stale entry for later outputs to reuse. Both classes
+  now release through `_release_node()`. Guarded by
+  `test_a_failed_start_returns_its_reference` and the surrounding
+  shared-node-lifecycle tests.
 - **Out-of-range channel writes.** `set_channel*()` updated their local-value
   bookkeeping before any bounds check, so channel 513 raised `IndexError` and
   channel 0 wrote onto channel 512. The REST API validated first, but the
