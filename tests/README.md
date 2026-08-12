@@ -3,6 +3,12 @@
 Unit tests for everything under `backend/`: the DMX engine, protocol parsers,
 MIDI integration, database models/migrations, auth, and every API router.
 
+The frontend has its own suite — see [`frontend/tests/README.md`](../frontend/tests/README.md).
+Two constants are duplicated across the two languages (the Access Profile page
+registry and the dark theme palette); the parity tests that guard them live
+here, in `test_config.py` and `test_api_settings.py`, and parse the JS files
+directly.
+
 ## Running
 
 ```bash

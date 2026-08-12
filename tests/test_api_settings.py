@@ -161,3 +161,42 @@ def test_reset_returns_the_defaults(client):
 def test_reset_on_an_empty_database(client, db_session):
     client.post("/api/settings/reset")
     assert db_session.query(Profile).count() == 1
+
+
+# ---------------------------------------------------------------------------
+# Cross-language parity
+#
+# The dark palette is declared twice: THEME_PRESETS["dark"] here and
+# DARK_THEME in frontend/src/stores/theme.js, which the frontend falls back to
+# before the server responds. If they drift, the UI flashes one palette and
+# then repaints in another.
+# ---------------------------------------------------------------------------
+import os
+import re
+
+FRONTEND_THEME_JS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "frontend", "src", "stores", "theme.js",
+)
+
+
+def parse_frontend_dark_theme():
+    with open(FRONTEND_THEME_JS) as handle:
+        source = handle.read()
+
+    body = re.search(r"const DARK_THEME = \{(.*?)\n\}", source, re.S)
+    assert body, "could not locate DARK_THEME in theme.js"
+    return dict(re.findall(r'(\w+):\s*"([^"]+)"', body.group(1)))
+
+
+@pytest.mark.skipif(not os.path.exists(FRONTEND_THEME_JS),
+                    reason="frontend sources not present")
+def test_frontend_dark_theme_matches_the_backend_preset():
+    assert parse_frontend_dark_theme() == THEME_PRESETS["dark"]
+
+
+@pytest.mark.skipif(not os.path.exists(FRONTEND_THEME_JS),
+                    reason="frontend sources not present")
+def test_the_theme_parser_actually_found_colours():
+    """Guard against parity passing because the regex matched nothing."""
+    assert len(parse_frontend_dark_theme()) == len(THEME_PRESETS["dark"]) > 0
