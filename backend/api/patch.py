@@ -143,7 +143,9 @@ async def create_patch(
             )
 
     # Get max position to place new patch at end
-    max_pos = db.query(func.max(Patch.position)).scalar() or -1
+    max_pos = db.query(func.max(Patch.position)).scalar()
+    if max_pos is None:
+        max_pos = -1
 
     # Create patch
     patch = Patch(

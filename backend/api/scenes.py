@@ -170,7 +170,9 @@ async def save_scene(
 ):
     """Save current fader values as a new scene."""
     # Get max position to place new scene at end
-    max_pos = db.query(func.max(Scene.position)).scalar() or -1
+    max_pos = db.query(func.max(Scene.position)).scalar()
+    if max_pos is None:
+        max_pos = -1
 
     # Create the scene
     scene = Scene(

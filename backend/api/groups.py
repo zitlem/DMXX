@@ -133,7 +133,9 @@ async def create_grid(
 ):
     """Create a new group grid."""
     # Get max position to place new grid at end
-    max_pos = db.query(func.max(GroupGrid.position)).scalar() or -1
+    max_pos = db.query(func.max(GroupGrid.position)).scalar()
+    if max_pos is None:
+        max_pos = -1
 
     grid = GroupGrid(
         name=request.name,
@@ -271,9 +273,11 @@ async def create_group(
     """Create a new group."""
     # Get max position within the target grid (or globally if no grid specified)
     if request.grid_id:
-        max_pos = db.query(func.max(Group.position)).filter(Group.grid_id == request.grid_id).scalar() or -1
+        max_pos = db.query(func.max(Group.position)).filter(Group.grid_id == request.grid_id).scalar()
     else:
-        max_pos = db.query(func.max(Group.position)).scalar() or -1
+        max_pos = db.query(func.max(Group.position)).scalar()
+    if max_pos is None:
+        max_pos = -1
 
     # If no grid_id specified, use the first grid (or create default)
     grid_id = request.grid_id

@@ -91,7 +91,9 @@ async def create_fixture(
         raise HTTPException(status_code=400, detail="Fixture must have at least one channel")
 
     # Get max position to place new fixture at end
-    max_pos = db.query(func.max(Fixture.position)).scalar() or -1
+    max_pos = db.query(func.max(Fixture.position)).scalar()
+    if max_pos is None:
+        max_pos = -1
 
     fixture = Fixture(
         name=request.name,

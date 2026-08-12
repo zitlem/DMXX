@@ -188,6 +188,90 @@ async def get_input_bypass():
     return {"bypass": dmx_interface.get_input_bypass()}
 
 
+# Static routes must be declared before the dynamic /{universe_id} route,
+# otherwise "channel-usage" is parsed as a universe ID.
+@router.get("/channel-usage")
+async def get_channel_usage(db: Session = Depends(get_db)):
+    """Get channel usage information for all universes.
+
+    Returns the highest used channel per universe, calculated from:
+    - Patched fixtures (start_channel + channel_count)
+    - Saved scenes (highest channel with non-zero value)
+    """
+    universes = db.query(Universe).all()
+    result = {}
+
+    for universe in universes:
+        # Get all patches for this universe with their fixtures
+        patches = db.query(Patch).filter(
+            Patch.universe_id == universe.id
+        ).join(Fixture).all()
+
+        highest_patched = 0
+        patched_channels = set()
+
+        for patch in patches:
+            # Get channel count from fixture definition - try multiple sources
+            fixture_def = patch.fixture.definition_json or {}
+
+            # Try "channels" array first
+            channels_array = fixture_def.get("channels", [])
+            channel_count = len(channels_array) if channels_array else 0
+
+            # Fallback: try "channelCount" or "channel_count" fields
+            if channel_count == 0:
+                channel_count = fixture_def.get("channelCount", 0) or fixture_def.get("channel_count", 0)
+
+            # Fallback: try "numChannels" or "totalChannels"
+            if channel_count == 0:
+                channel_count = fixture_def.get("numChannels", 0) or fixture_def.get("totalChannels", 0)
+
+            # Fallback: try to infer from modes
+            if channel_count == 0:
+                modes = fixture_def.get("modes", [])
+                if modes and len(modes) > 0:
+                    # Use first mode's channel count
+                    first_mode = modes[0]
+                    if isinstance(first_mode, dict):
+                        channel_count = first_mode.get("channels", 0) or first_mode.get("channelCount", 0) or len(first_mode.get("channelList", []))
+
+            # Ensure at least 1 channel
+            if channel_count == 0:
+                channel_count = 1
+
+            end_channel = patch.start_channel + channel_count - 1
+
+            # Track highest channel
+            if end_channel > highest_patched:
+                highest_patched = end_channel
+
+            # Track all patched channels
+            for ch in range(patch.start_channel, end_channel + 1):
+                patched_channels.add(ch)
+
+        # Find highest channel with non-zero value in any saved scene
+        highest_scene = db.query(func.max(SceneValue.channel)).filter(
+            SceneValue.universe_id == universe.id,
+            SceneValue.value > 0
+        ).scalar() or 0
+
+        # Highest used is the max of patched and scene channels
+        highest_used = max(highest_patched, highest_scene)
+
+        result[str(universe.id)] = {
+            "universe_id": universe.id,
+            "label": universe.label,
+            "highest_patched": highest_patched,
+            "highest_scene": highest_scene,
+            "highest_used": highest_used,
+            "patched_count": len(patched_channels),
+            "patch_count": len(patches),
+            "patched_channels": sorted(list(patched_channels))
+        }
+
+    return {"universes": result}
+
+
 @router.get("/{universe_id}")
 async def get_universe_io(universe_id: int, db: Session = Depends(get_db)):
     """Get I/O configuration for a specific universe."""
@@ -643,85 +727,3 @@ async def get_network_interfaces():
             pass
 
     return {"interfaces": interfaces}
-
-
-@router.get("/channel-usage")
-async def get_channel_usage(db: Session = Depends(get_db)):
-    """Get channel usage information for all universes.
-
-    Returns the highest used channel per universe, calculated from:
-    - Patched fixtures (start_channel + channel_count)
-    - Saved scenes (highest channel with non-zero value)
-    """
-    universes = db.query(Universe).all()
-    result = {}
-
-    for universe in universes:
-        # Get all patches for this universe with their fixtures
-        patches = db.query(Patch).filter(
-            Patch.universe_id == universe.id
-        ).join(Fixture).all()
-
-        highest_patched = 0
-        patched_channels = set()
-
-        for patch in patches:
-            # Get channel count from fixture definition - try multiple sources
-            fixture_def = patch.fixture.definition_json or {}
-
-            # Try "channels" array first
-            channels_array = fixture_def.get("channels", [])
-            channel_count = len(channels_array) if channels_array else 0
-
-            # Fallback: try "channelCount" or "channel_count" fields
-            if channel_count == 0:
-                channel_count = fixture_def.get("channelCount", 0) or fixture_def.get("channel_count", 0)
-
-            # Fallback: try "numChannels" or "totalChannels"
-            if channel_count == 0:
-                channel_count = fixture_def.get("numChannels", 0) or fixture_def.get("totalChannels", 0)
-
-            # Fallback: try to infer from modes
-            if channel_count == 0:
-                modes = fixture_def.get("modes", [])
-                if modes and len(modes) > 0:
-                    # Use first mode's channel count
-                    first_mode = modes[0]
-                    if isinstance(first_mode, dict):
-                        channel_count = first_mode.get("channels", 0) or first_mode.get("channelCount", 0) or len(first_mode.get("channelList", []))
-
-            # Ensure at least 1 channel
-            if channel_count == 0:
-                channel_count = 1
-
-            end_channel = patch.start_channel + channel_count - 1
-
-            # Track highest channel
-            if end_channel > highest_patched:
-                highest_patched = end_channel
-
-            # Track all patched channels
-            for ch in range(patch.start_channel, end_channel + 1):
-                patched_channels.add(ch)
-
-        # Find highest channel with non-zero value in any saved scene
-        highest_scene = db.query(func.max(SceneValue.channel)).filter(
-            SceneValue.universe_id == universe.id,
-            SceneValue.value > 0
-        ).scalar() or 0
-
-        # Highest used is the max of patched and scene channels
-        highest_used = max(highest_patched, highest_scene)
-
-        result[str(universe.id)] = {
-            "universe_id": universe.id,
-            "label": universe.label,
-            "highest_patched": highest_patched,
-            "highest_scene": highest_scene,
-            "highest_used": highest_used,
-            "patched_count": len(patched_channels),
-            "patch_count": len(patches),
-            "patched_channels": sorted(list(patched_channels))
-        }
-
-    return {"universes": result}
