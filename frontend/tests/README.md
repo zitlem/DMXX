@@ -24,6 +24,7 @@ npm run test:coverage # with a coverage table
 | `pages.config.test.js` | the page registry and `getPageLabel` |
 | `router.test.js` | the route table: permissions, names, duplicates |
 | `router.guard.test.js` | `router.beforeEach` - the authorization gate |
+| `groupText.test.js` | the group text format: serialise, parse, diff, percent/raw conversion |
 
 ## Conventions
 
@@ -43,8 +44,14 @@ npm run test:coverage # with a coverage table
 
 ## Coverage
 
-95% of `src/**/*.js`. The `.vue` components (about 19,000 lines) have no tests
-— covering them needs `@vue/test-utils` and is a separate piece of work.
+96% of `src/**/*.js`.
+
+The `.vue` components have no tests of their own — that needs `@vue/test-utils`
+and is a separate piece of work. Where component logic is risky enough to
+deserve tests, the fix is to move it out of the SFC: `src/lib/groupText.js`
+holds the group text format (serialise, parse, diff) that the bulk editor in
+`Groups.vue` runs on, because that code can delete groups and needed to be
+testable. `Groups.vue` imports it rather than keeping its own copy.
 
 ## Cross-language guards
 

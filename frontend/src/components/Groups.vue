@@ -939,6 +939,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 import draggable from 'vuedraggable'
 import { useDmxStore } from '../stores/dmx.js'
+import {
+  rawToPercent, percentToRaw, normName,
+  serializeGroups, parseGroupText, convertDocumentValues, diffGroups
+} from '../lib/groupText.js'
 import { useAuthStore } from '../stores/auth.js'
 import { wsManager } from '../websocket.js'
 
@@ -1071,14 +1075,6 @@ const editMemberValue = ref(255) // temp value during edit
 // Base value display mode: 'raw' (0-255) or 'percent' (0-100%)
 const baseValueMode = ref('raw')
 
-function rawToPercent(val) {
-  return Math.round((val / 255) * 100)
-}
-
-function percentToRaw(pct) {
-  return Math.round((pct / 100) * 255)
-}
-
 function toDisplayValue(raw) {
   return baseValueMode.value === 'percent' ? rawToPercent(raw) : raw
 }
@@ -1104,10 +1100,6 @@ function teDisplayValue(raw) {
 
 function teRawValue(display) {
   return textEditorMode.value === 'percent' ? percentToRaw(display) : display
-}
-
-function normName(s) {
-  return s.trim().replace(/\s+/g, ' ')
 }
 
 // Bulk base value editing
@@ -1844,36 +1836,8 @@ function closeBulkAddModal() {
 
 // ---- Text Editor ----
 
-const CHANNEL_RE = /^(?:U(\d+)\.)?(\d+)\/(\d+)$/
-
 function serializeGroupsToText() {
-  const lines = []
-  for (const grid of grids.value) {
-    if (lines.length > 0) lines.push('')
-    lines.push(`=== ${grid.name}`)
-    const groups = grid.groups || []
-    for (let gi = 0; gi < groups.length; gi++) {
-      const group = groups[gi]
-      if (gi > 0) lines.push('')
-      lines.push(`[${group.name}] ${group.mode}`)
-      for (const member of (group.members || [])) {
-        if (member.target_type === 'universe_master') {
-          lines.push(`# U${member.target_universe_id} Master`)
-          continue
-        }
-        if (member.target_type === 'global_master') {
-          lines.push('# Global Master')
-          continue
-        }
-        const label = dmxStore.getChannelLabel(member.universe_id, member.channel)
-        const isDefault = !label || label === `Ch ${member.channel}`
-        if (!isDefault) lines.push(label)
-        const val = teDisplayValue(member.base_value)
-        lines.push(`U${member.universe_id}.${member.channel}/${val}`)
-      }
-    }
-  }
-  return lines.join('\n')
+  return serializeGroups(grids.value, dmxStore.getChannelLabel, teDisplayValue)
 }
 
 function openTextEditor() {
@@ -1894,220 +1858,45 @@ function openTextEditor() {
 }
 
 function toggleTextEditorMode() {
-  // Re-parse current content, switch mode, re-serialize values
-  const lines = textEditorContent.value.split('\n')
-  const oldMode = textEditorMode.value
-  textEditorMode.value = oldMode === 'raw' ? 'percent' : 'raw'
-
-  const newLines = lines.map(line => {
-    const m = line.match(CHANNEL_RE)
-    if (!m) return line
-    const uid = m[1] || ''
-    const ch = parseInt(m[2])
-    const oldVal = parseInt(m[3])
-    // Convert old display value to raw, then to new display
-    const raw = oldMode === 'percent' ? percentToRaw(oldVal) : oldVal
-    const newVal = textEditorMode.value === 'percent' ? rawToPercent(raw) : raw
-    const prefix = uid ? `U${uid}.` : ''
-    return `${prefix}${ch}/${newVal}`
-  })
-  textEditorContent.value = newLines.join('\n')
+  const from = textEditorMode.value
+  const to = from === 'raw' ? 'percent' : 'raw'
+  textEditorMode.value = to
+  textEditorContent.value = convertDocumentValues(textEditorContent.value, from, to)
 }
 
 function parseTextEditor() {
-  const lines = textEditorContent.value.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
-  const parsed = []
-  let currentGrid = null
-  let currentGroup = null
-  let currentGroupMode = 'proportional'
-  let pendingLabel = null
-  const errors = []
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim()
-    if (!line) {
-      pendingLabel = null
-      continue
-    }
-
-    // Comment line (master targets)
-    if (line.startsWith('#')) continue
-
-    // Grid header
-    const gridMatch = line.match(/^===\s+(.+)$/)
-    if (gridMatch) {
-      currentGrid = normName(gridMatch[1])
-      currentGroup = null
-      pendingLabel = null
-      continue
-    }
-
-    // Group header: [Name] or [Name] mode
-    const groupMatch = line.match(/^\[(.+)\]\s*(\w+)?$/)
-    if (groupMatch) {
-      currentGroup = normName(groupMatch[1])
-      currentGroupMode = groupMatch[2] || 'proportional'
-      pendingLabel = null
-      continue
-    }
-
-    // Channel definition
-    const chMatch = line.match(CHANNEL_RE)
-    if (chMatch) {
-      if (!currentGroup) {
-        errors.push(`Line ${i + 1}: channel without a group`)
-        pendingLabel = null
-        continue
-      }
-      const universe_id = chMatch[1] ? parseInt(chMatch[1]) : null
-      const channel = parseInt(chMatch[2])
-      const displayVal = parseInt(chMatch[3])
-      const base_value = teRawValue(displayVal)
-
-      parsed.push({
-        gridName: normName(currentGrid || (grids.value[0]?.name || 'Default')),
-        groupName: normName(currentGroup),
-        mode: currentGroupMode,
-        universe_id: universe_id || 1,
-        channel,
-        base_value: Math.max(0, Math.min(255, base_value)),
-        label: pendingLabel
-      })
-      pendingLabel = null
-      continue
-    }
-
-    // Otherwise it's a label line
-    pendingLabel = line
-  }
-
-  return { parsed, errors }
+  return parseGroupText(
+    textEditorContent.value,
+    grids.value[0]?.name || 'Default',
+    teRawValue
+  )
 }
 
 async function previewTextEditorChanges() {
   try {
-  const { parsed, errors } = parseTextEditor()
+  const { parsed, errors, gridNames, groupKeys, groupModes } = parseTextEditor()
 
   if (errors.length > 0) {
     alert('Syntax errors:\n' + errors.join('\n'))
     return
   }
 
-  // Build lookup of existing members
-  const existing = new Map() // key: "gridName|groupName|uid|ch" -> {member, group, grid}
-  const existingGroups = new Map() // key: "gridName|groupName" -> group
-  const existingGrids = new Map() // key: gridName -> grid
+  // Diff against what is on screen. diffGroups is pure and unit tested in
+  // tests/groupText.test.js - including the rename-reads-as-delete behaviour
+  // that the confirmation below warns about.
+  const {
+    toAdd, toUpdate, toDelete, toUpdateLabels,
+    newGrids, newGroups, groupsToDelete, gridsToDelete
+  } = diffGroups(parsed, grids.value, {
+    gridNames,
+    groupKeys,
+    getLabel: dmxStore.getChannelLabel,
+    // Forgive percent round-trip rounding, e.g. 127 -> 50% -> 128
+    sameValue: (stored, wanted) =>
+      stored === wanted || teRawValue(teDisplayValue(stored)) === wanted
+  })
 
-  for (const grid of grids.value) {
-    const gn = normName(grid.name)
-    existingGrids.set(gn, grid)
-    for (const group of (grid.groups || [])) {
-      const gpn = normName(group.name)
-      existingGroups.set(`${gn}|${gpn}`, group)
-      for (const member of (group.members || [])) {
-        if (member.target_type === 'channel') {
-          const key = `${gn}|${gpn}|${member.universe_id}|${member.channel}`
-          existing.set(key, { member, group, grid })
-        }
-      }
-    }
-  }
-
-  // Build desired set
-  const desired = new Set()
-  const toAdd = []
-  const toUpdate = []
-  const toUpdateLabels = []
-  const newGroups = new Set()
-  const newGrids = new Set()
-  const groupModes = new Map() // key: "gridName|groupName" -> mode
-
-  for (const entry of parsed) {
-    const key = `${entry.gridName}|${entry.groupName}|${entry.universe_id}|${entry.channel}`
-    desired.add(key)
-
-    const groupKey = `${entry.gridName}|${entry.groupName}`
-    if (!groupModes.has(groupKey)) {
-      groupModes.set(groupKey, entry.mode)
-    }
-
-    if (!existingGrids.has(entry.gridName)) {
-      newGrids.add(entry.gridName)
-    }
-    if (!existingGroups.has(groupKey)) {
-      newGroups.add(groupKey)
-    }
-
-    const ex = existing.get(key)
-    if (ex) {
-      // Account for round-trip rounding when in % mode (e.g. 127→50%→128)
-      if (ex.member.base_value !== entry.base_value &&
-          teRawValue(teDisplayValue(ex.member.base_value)) !== entry.base_value) {
-        toUpdate.push({ member: ex.member, group: ex.group, base_value: entry.base_value })
-      }
-    } else {
-      toAdd.push(entry)
-    }
-
-    if (entry.label !== null) {
-      const currentLabel = dmxStore.getChannelLabel(entry.universe_id, entry.channel)
-      const isDefault = !currentLabel || currentLabel === `Ch ${entry.channel}`
-      if ((isDefault && entry.label) || (!isDefault && entry.label !== currentLabel)) {
-        toUpdateLabels.push(entry)
-      }
-    }
-  }
-
-  // Members to delete: existing channel members not in desired set
-  const toDelete = []
-  for (const [key, val] of existing) {
-    if (!desired.has(key)) {
-      toDelete.push(val)
-    }
-  }
-
-  // Parse all grid and group headers from text for deletion detection
-  const parsedGridKeys = new Set()
-  const parsedGroupKeys = new Set()
-  {
-    let cGrid = null
-    for (const line of textEditorContent.value.split('\n')) {
-      const l = line.trim()
-      const gm = l.match(/^===\s+(.+)$/)
-      if (gm) { cGrid = normName(gm[1]); parsedGridKeys.add(cGrid); continue }
-      const grm = l.match(/^\[(.+)\]\s*(\w+)?$/)
-      if (grm && cGrid) {
-        const gKey = `${cGrid}|${normName(grm[1])}`
-        parsedGroupKeys.add(gKey)
-        if (!groupModes.has(gKey)) {
-          groupModes.set(gKey, grm[2] || 'proportional')
-        }
-      }
-    }
-  }
-
-  // Groups to delete: header removed from text
-  const groupsToDelete = []
-  for (const [key, group] of existingGroups) {
-    if (!parsedGroupKeys.has(key)) {
-      groupsToDelete.push(group)
-    }
-  }
-
-  // Grids to delete: === header removed from text (and not referenced by any new group)
-  const gridsToDelete = []
-  for (const [name, grid] of existingGrids) {
-    if (!parsedGridKeys.has(name)) {
-      gridsToDelete.push(grid)
-    }
-  }
-
-  // Also detect new grids from headers (not just from parsed channel entries)
-  for (const gridName of parsedGridKeys) {
-    if (!existingGrids.has(gridName)) {
-      newGrids.add(gridName)
-    }
-  }
+  const parsedGroupKeys = groupKeys
 
   // Check if group order changed
   const existingGroupOrder = []
