@@ -7,3 +7,7 @@ htmlcov/
 node_modules/
 backups/
 coverage/
+
+# Runtime state - deployment-specific, must never be overwritten by a pull
+data/*.db
+config.json
