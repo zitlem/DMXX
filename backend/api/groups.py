@@ -501,6 +501,8 @@ async def update_member(
     member.channel = request.channel
     member.base_value = request.base_value
     member.color_role = request.color_role
+    member.target_type = request.target_type
+    member.target_universe_id = request.target_universe_id
 
     db.commit()
     db.refresh(member)
@@ -517,7 +519,9 @@ async def update_member(
         "universe_id": member.universe_id,
         "channel": member.channel,
         "base_value": member.base_value,
-        "color_role": member.color_role
+        "color_role": member.color_role,
+        "target_type": member.target_type,
+        "target_universe_id": member.target_universe_id
     }
 
 

@@ -369,6 +369,55 @@ def test_updating_a_member_clears_its_old_contribution(client, interface):
     assert interface.get_channel(1, 1) == 0
 
 
+def test_update_can_convert_a_member_to_a_virtual_master(client, db_session,
+                                                        interface):
+    """Regression: target_type used to be ignored, leaving a broken row."""
+    group = create_group(client, mode="follow", members=[channel_member(1, 1)])
+    member_id = client.get(f"/api/groups/{group['id']}").json()["members"][0]["id"]
+
+    body = client.put(f"/api/groups/{group['id']}/members/{member_id}",
+                      json={"target_type": "global_master"}).json()
+
+    assert body["target_type"] == "global_master"
+    stored = db_session.query(GroupMember).one()
+    assert stored.target_type == "global_master"
+
+    # And it actually drives the global grandmaster now
+    interface.apply_group_direct(group["id"], 64)
+    assert interface.get_global_grandmaster() == 64
+
+
+def test_update_can_convert_a_member_to_a_universe_master(client, db_session,
+                                                          interface):
+    group = create_group(client, mode="follow", members=[channel_member(1, 1)])
+    member_id = client.get(f"/api/groups/{group['id']}").json()["members"][0]["id"]
+
+    body = client.put(f"/api/groups/{group['id']}/members/{member_id}", json={
+        "target_type": "universe_master", "target_universe_id": 2}).json()
+
+    assert body["target_type"] == "universe_master"
+    assert body["target_universe_id"] == 2
+
+    interface.apply_group_direct(group["id"], 120)
+    assert interface.get_universe_grandmaster(2) == 120
+
+
+def test_update_can_convert_a_virtual_master_back_to_a_channel(client,
+                                                               db_session,
+                                                               interface):
+    group = create_group(client)
+    client.post(f"/api/groups/{group['id']}/members",
+                json={"target_type": "global_master"})
+    member_id = client.get(f"/api/groups/{group['id']}").json()["members"][0]["id"]
+
+    body = client.put(f"/api/groups/{group['id']}/members/{member_id}",
+                      json=channel_member(1, 4)).json()
+
+    assert body["target_type"] == "channel"
+    assert body["target_universe_id"] is None
+    assert db_session.query(GroupMember).one().channel == 4
+
+
 def test_update_missing_member_is_404(client):
     group = create_group(client)
     assert client.put(f"/api/groups/{group['id']}/members/99",

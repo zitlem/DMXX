@@ -26,6 +26,9 @@ class SourceInfo:
     packet_count: int = 0
     last_values: List[int] = field(default_factory=lambda: [0] * 512)
     changing_channels: Set[int] = field(default_factory=set)
+    # True once a timeout has been announced for the current quiet period.
+    # Reset when packets resume, so each silence produces exactly one event.
+    timeout_notified: bool = False
 
     @property
     def packets_per_second(self) -> float:
@@ -341,6 +344,8 @@ class NetworkMonitor:
         source = self._sources[key]
         source.packet_count += 1
         source.last_seen = now
+        # Traffic resumed - arm the timeout notification again
+        source.timeout_notified = False
 
         # Detect changing channels
         changing = set()
@@ -412,7 +417,9 @@ class NetworkMonitor:
                     age = now - source.last_seen
                     if age > 30:  # Remove after 30s
                         stale_keys.append(key)
-                    elif age > 5 and source.is_active:  # Notify timeout after 5s
+                    elif age > 5 and not source.timeout_notified:
+                        # Gone quiet - announce it once, until traffic resumes
+                        source.timeout_notified = True
                         timeout_keys.append(key)
 
                 # Notify about timeouts

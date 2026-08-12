@@ -88,28 +88,21 @@ def verify_token(token: str) -> Optional[dict]:
 
 
 def is_ip_whitelisted(ip_address: str, db: Session) -> bool:
-    """Check if an IP address is whitelisted."""
+    """Check if an IP address is whitelisted.
+
+    Matching is delegated to ip_matches() so that wildcard entries are
+    octet-aligned: "192.168.1.*" matches 192.168.1.x only, never 192.168.11.x.
+    """
     # Check config file whitelist first
     config = load_config()
-    config_whitelist = config.get("ip_whitelist", [])
-    for entry in config_whitelist:
-        if entry == ip_address:
+    for entry in config.get("ip_whitelist", []):
+        if ip_matches(ip_address, entry):
             return True
-        # Support simple wildcard (e.g., 192.168.1.*)
-        if entry.endswith(".*"):
-            prefix = entry[:-2]
-            if ip_address.startswith(prefix):
-                return True
 
     # Check database whitelist
-    db_whitelist = db.query(IPWhitelist).all()
-    for entry in db_whitelist:
-        if entry.ip_address == ip_address:
+    for entry in db.query(IPWhitelist).all():
+        if ip_matches(ip_address, entry.ip_address):
             return True
-        if entry.ip_address.endswith(".*"):
-            prefix = entry.ip_address[:-2]
-            if ip_address.startswith(prefix):
-                return True
     return False
 
 

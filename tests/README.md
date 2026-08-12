@@ -49,8 +49,24 @@ pytest --cov=backend         # with coverage
 
 ## Regression guards
 
-Two bugs surfaced while writing this suite and were fixed; these tests keep
-them fixed:
+Bugs found while writing this suite and since fixed; these tests keep them
+fixed:
+
+- **Over-broad IP whitelist.** `is_ip_whitelisted()` matched wildcards with a
+  bare string prefix, so `192.168.1.*` also admitted `192.168.11.x` — and
+  whitelisted IPs get full admin. It now delegates to `ip_matches()`. Guarded
+  by `test_*_whitelist_wildcards_are_octet_aligned`,
+  `test_whitelist_matching_agrees_with_ip_matches` and
+  `test_a_neighbouring_subnet_is_not_authenticated`.
+- **Dead timeout branch.** `_cleanup_loop` tested `age > 5 and source.is_active`
+  where `is_active` means `age < 5`, so `monitor_source_timeout` was never
+  broadcast. `SourceInfo` now carries a `timeout_notified` flag, cleared when
+  traffic resumes. Guarded by the cleanup-loop tests in
+  `test_network_monitor.py`.
+- **Dropped member fields.** `PUT /groups/{id}/members/{id}` accepted
+  `target_type` / `target_universe_id` but never wrote them, silently leaving a
+  `channel` member with null universe and channel. Guarded by
+  `test_update_can_convert_a_member_to_*`.
 
 - **Position off-by-one.** `max(position) or -1` treated an existing max
   position of `0` as "no rows", so the second row created also landed on

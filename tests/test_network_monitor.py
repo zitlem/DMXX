@@ -325,3 +325,108 @@ async def test_broadcast_drops_dead_clients(monitor):
 async def test_stop_on_an_unstarted_monitor_is_safe(monitor):
     await monitor.stop()
     assert monitor.is_running() is False
+
+
+# ---------------------------------------------------------------------------
+# Cleanup loop: timeout announcements and stale removal
+# ---------------------------------------------------------------------------
+async def run_one_cleanup_pass(monitor):
+    """Run exactly one iteration of the cleanup loop, without waiting 5s."""
+    import asyncio
+
+    monitor._running = True
+
+    async def stop_after_first_sleep(_delay):
+        monitor._running = False
+
+    real_sleep = asyncio.sleep
+    asyncio.sleep = stop_after_first_sleep
+    try:
+        await monitor._cleanup_loop()
+    finally:
+        asyncio.sleep = real_sleep
+
+
+def age_source(monitor, key, seconds):
+    monitor._sources[key].last_seen = time.time() - seconds
+
+
+@pytest.mark.asyncio
+async def test_a_quiet_source_is_announced_once(monitor):
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+    age_source(monitor, "artnet:10.0.0.1:0", 10)
+    ws.sent.clear()
+
+    await run_one_cleanup_pass(monitor)
+    timeouts = [m for m in ws.sent if m["type"] == "monitor_source_timeout"]
+    assert len(timeouts) == 1
+    assert timeouts[0]["data"]["key"] == "artnet:10.0.0.1:0"
+
+    # Still quiet on the next pass - but no repeat announcement
+    ws.sent.clear()
+    await run_one_cleanup_pass(monitor)
+    assert [m for m in ws.sent if m["type"] == "monitor_source_timeout"] == []
+
+
+@pytest.mark.asyncio
+async def test_an_active_source_is_not_announced(monitor):
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+    ws.sent.clear()
+
+    await run_one_cleanup_pass(monitor)
+    assert [m for m in ws.sent if m["type"] == "monitor_source_timeout"] == []
+
+
+@pytest.mark.asyncio
+async def test_resuming_traffic_re_arms_the_timeout(monitor):
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+    age_source(monitor, "artnet:10.0.0.1:0", 10)
+    await run_one_cleanup_pass(monitor)
+    assert monitor._sources["artnet:10.0.0.1:0"].timeout_notified is True
+
+    # Packets resume, then it goes quiet again - a second event is expected
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [1] * 512)
+    assert monitor._sources["artnet:10.0.0.1:0"].timeout_notified is False
+
+    age_source(monitor, "artnet:10.0.0.1:0", 10)
+    ws.sent.clear()
+    await run_one_cleanup_pass(monitor)
+    assert len([m for m in ws.sent if m["type"] == "monitor_source_timeout"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_sources_are_removed(monitor):
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+    age_source(monitor, "artnet:10.0.0.1:0", 40)
+    ws.sent.clear()
+
+    await run_one_cleanup_pass(monitor)
+
+    assert monitor.get_all_sources() == {}
+    removals = [m for m in ws.sent if m["type"] == "monitor_source_removed"]
+    assert removals[0]["data"]["key"] == "artnet:10.0.0.1:0"
+
+
+@pytest.mark.asyncio
+async def test_a_stale_source_is_removed_without_a_timeout_event(monitor):
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+    age_source(monitor, "artnet:10.0.0.1:0", 40)
+    ws.sent.clear()
+
+    await run_one_cleanup_pass(monitor)
+    assert [m for m in ws.sent if m["type"] == "monitor_source_timeout"] == []
+
+
+def test_new_sources_start_un_notified(monitor):
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+    assert monitor._sources["artnet:10.0.0.1:0"].timeout_notified is False

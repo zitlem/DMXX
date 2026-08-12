@@ -407,3 +407,64 @@ async def test_require_admin_blocks_everyone_else():
 
     with pytest.raises(HTTPException):
         await guard({})
+
+
+# ---------------------------------------------------------------------------
+# Wildcard whitelist matching (regression: prefix match was not octet-aligned)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("ip,allowed", [
+    ("192.168.1.5", True),
+    ("192.168.1.255", True),
+    ("192.168.11.5", False),    # neighbouring /24, must not match
+    ("192.168.100.7", False),
+    ("192.168.2.5", False),
+])
+def test_config_whitelist_wildcards_are_octet_aligned(db_session, monkeypatch,
+                                                      tmp_path, ip, allowed):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"ip_whitelist": ["192.168.1.*"]}))
+    monkeypatch.setattr(auth, "CONFIG_PATH", str(path))
+
+    assert auth.is_ip_whitelisted(ip, db_session) is allowed
+
+
+@pytest.mark.parametrize("ip,allowed", [
+    ("10.0.0.9", True),
+    ("10.0.09.9", False),
+    ("10.0.99.9", False),
+])
+def test_database_whitelist_wildcards_are_octet_aligned(db_session, monkeypatch,
+                                                        tmp_path, ip, allowed):
+    monkeypatch.setattr(auth, "CONFIG_PATH", str(tmp_path / "none.json"))
+    db_session.add(IPWhitelist(ip_address="10.0.0.*"))
+    db_session.commit()
+
+    assert auth.is_ip_whitelisted(ip, db_session) is allowed
+
+
+def test_whitelist_matching_agrees_with_ip_matches(db_session, monkeypatch,
+                                                   tmp_path):
+    """The whitelist and the profile-IP matcher must not disagree."""
+    monkeypatch.setattr(auth, "CONFIG_PATH", str(tmp_path / "none.json"))
+    pattern = "172.16.5.*"
+    db_session.add(IPWhitelist(ip_address=pattern))
+    db_session.commit()
+
+    for ip in ("172.16.5.1", "172.16.50.1", "172.16.5.200", "172.16.55.9"):
+        assert auth.is_ip_whitelisted(ip, db_session) == auth.ip_matches(ip, pattern)
+
+
+@pytest.mark.asyncio
+async def test_a_neighbouring_subnet_is_not_authenticated(db_session, monkeypatch,
+                                                          tmp_path):
+    """End to end: the over-broad match must not grant admin access."""
+    monkeypatch.setattr(auth, "CONFIG_PATH", str(tmp_path / "none.json"))
+    db_session.add(IPWhitelist(ip_address="192.168.1.*"))
+    db_session.commit()
+
+    granted = await auth.get_current_user(FakeRequest("192.168.1.50"), None,
+                                          db_session)
+    assert granted["method"] == "ip_whitelist"
+
+    with pytest.raises(HTTPException):
+        await auth.get_current_user(FakeRequest("192.168.11.50"), None, db_session)
