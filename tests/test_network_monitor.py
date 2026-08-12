@@ -430,3 +430,165 @@ async def test_a_stale_source_is_removed_without_a_timeout_event(monitor):
 def test_new_sources_start_un_notified(monitor):
     monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
     assert monitor._sources["artnet:10.0.0.1:0"].timeout_notified is False
+
+
+# ---------------------------------------------------------------------------
+# Broadcast loop
+# ---------------------------------------------------------------------------
+async def run_one_broadcast_pass(monitor):
+    """Run exactly one iteration of the broadcast loop, without waiting."""
+    import asyncio
+
+    monitor._running = True
+
+    async def stop_after_first_sleep(_delay):
+        monitor._running = False
+
+    real_sleep = asyncio.sleep
+    asyncio.sleep = stop_after_first_sleep
+    try:
+        await monitor._broadcast_loop()
+    finally:
+        asyncio.sleep = real_sleep
+
+
+@pytest.mark.asyncio
+async def test_pending_updates_are_batched_into_one_message(monitor):
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+    monitor.on_packet_received("sacn", "10.0.0.2", 1, [0] * 512)
+    ws.sent.clear()
+
+    await run_one_broadcast_pass(monitor)
+
+    updates = [m for m in ws.sent if m["type"] == "monitor_update"]
+    assert len(updates) == 1
+    assert set(updates[0]["data"]["sources"]) == {"artnet:10.0.0.1:0",
+                                                  "sacn:10.0.0.2:1"}
+
+
+@pytest.mark.asyncio
+async def test_the_pending_queue_is_drained(monitor):
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+
+    await run_one_broadcast_pass(monitor)
+    assert monitor._pending_updates == {}
+
+    ws.sent.clear()
+    await run_one_broadcast_pass(monitor)
+    assert [m for m in ws.sent if m["type"] == "monitor_update"] == []
+
+
+@pytest.mark.asyncio
+async def test_updates_are_dropped_when_nobody_is_listening(monitor):
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+
+    await run_one_broadcast_pass(monitor)
+
+    # Nothing was sent, and the queue is retained for the next connected client
+    assert monitor._pending_updates != {}
+
+
+@pytest.mark.asyncio
+async def test_subscribers_receive_full_values_each_pass(monitor):
+    values = [5] * 512
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, values)
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+    await monitor.subscribe_source(ws, "artnet:10.0.0.1:0")
+    ws.sent.clear()
+
+    await run_one_broadcast_pass(monitor)
+
+    value_messages = [m for m in ws.sent if m["type"] == "monitor_source_values"]
+    assert len(value_messages) == 1
+    assert value_messages[0]["data"]["values"] == values
+
+
+@pytest.mark.asyncio
+async def test_subscriptions_to_removed_sources_are_skipped(monitor):
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+    await monitor.subscribe_source(ws, "artnet:gone:0")
+    ws.sent.clear()
+
+    await run_one_broadcast_pass(monitor)
+    assert ws.sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_failing_subscriber_does_not_break_the_loop(monitor):
+    monitor.on_packet_received("artnet", "10.0.0.1", 0, [0] * 512)
+    good, bad = FakeWebSocket(), FakeWebSocket()
+    for ws in (good, bad):
+        await monitor.connect_client(ws)
+        await monitor.subscribe_source(ws, "artnet:10.0.0.1:0")
+    bad.fail = True
+    good.sent.clear()
+
+    await run_one_broadcast_pass(monitor)   # must not raise
+
+    assert any(m["type"] == "monitor_source_values" for m in good.sent)
+
+
+@pytest.mark.asyncio
+async def test_the_broadcast_loop_exits_on_cancellation(monitor):
+    import asyncio
+
+    monitor._running = True
+    task = asyncio.create_task(monitor._broadcast_loop())
+    await asyncio.sleep(0)
+    task.cancel()
+    await task          # the loop swallows CancelledError and returns
+    assert task.done()
+
+
+# ---------------------------------------------------------------------------
+# Shutdown
+# ---------------------------------------------------------------------------
+class FakeTransport:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_transports_and_tasks(monitor):
+    import asyncio
+
+    ws = FakeWebSocket()
+    await monitor.connect_client(ws)
+
+    artnet, sacn_one, sacn_two = FakeTransport(), FakeTransport(), FakeTransport()
+    monitor._running = True
+    monitor._artnet_transport = artnet
+    monitor._artnet_protocol = object()
+    monitor._sacn_transports = {1: sacn_one, 2: sacn_two}
+    monitor._sacn_protocols = {1: object(), 2: object()}
+    monitor._broadcast_task = asyncio.create_task(asyncio.sleep(30))
+    monitor._cleanup_task = asyncio.create_task(asyncio.sleep(30))
+    ws.sent.clear()
+
+    await monitor.stop()
+
+    assert monitor.is_running() is False
+    assert artnet.closed and sacn_one.closed and sacn_two.closed
+    assert monitor._artnet_transport is None
+    assert monitor._sacn_transports == {}
+    assert monitor._sacn_protocols == {}
+    assert monitor._broadcast_task.cancelled()
+    assert monitor._cleanup_task.cancelled()
+    assert ws.sent[-1] == {"type": "monitor_status", "data": {"running": False}}
+
+
+@pytest.mark.asyncio
+async def test_stop_is_idempotent(monitor):
+    monitor._running = True
+    await monitor.stop()
+    await monitor.stop()   # second call returns immediately
+    assert monitor.is_running() is False

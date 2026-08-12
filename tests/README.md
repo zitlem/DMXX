@@ -45,7 +45,26 @@ pytest --cov=backend         # with coverage
 - Synchronous code that fires `asyncio.create_task(...)` is covered by an
   autouse shim; request the `task_recorder` fixture to assert on scheduled
   broadcasts.
-- No test opens a socket, binds a port or talks to MIDI hardware.
+- No test opens a socket, binds a port or talks to MIDI hardware. Background
+  loops (`_broadcast_loop`, `_cleanup_loop`, `_process_loop`) are driven one
+  iteration at a time by stubbing `asyncio.sleep`; ports, pyartnet nodes and
+  `mido` are replaced with in-memory fakes.
+
+## Coverage
+
+92% of `backend/` overall. What remains uncovered is code that requires real
+I/O to reach:
+
+| Module | Covered | Not covered |
+|--------|---------|-------------|
+| `dmx_inputs.py` | 58% | UDP socket binding and multicast joins in `ArtNetInput.start()` / `SACNInput.start()` |
+| `network_monitor.py` | 78% | `start()` and `_add_sacn_listener()` - same socket binding |
+| `midi_network.py` | 78% | the pymidi server thread (`_run_server`) |
+| `midi_handler.py` | 95% | the `mido` import fallback and a few error branches |
+| everything else | 90-100% | — |
+
+Covering the socket paths means binding real UDP ports on loopback, which the
+current suite deliberately avoids; that would belong behind an opt-in marker.
 
 ## Regression guards
 

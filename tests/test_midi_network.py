@@ -206,3 +206,86 @@ async def test_stop_server_when_never_started(handler):
     await handler.stop_server()
     assert handler._running is False
     assert handler._peers == {}
+
+
+# ---------------------------------------------------------------------------
+# The pymidi Handler subclass built by _create_handler()
+# ---------------------------------------------------------------------------
+pymidi_only = pytest.mark.skipif(not mn.PYMIDI_AVAILABLE,
+                                 reason="pymidi not installed")
+
+
+@pymidi_only
+def test_peer_connect_and_disconnect_are_tracked(handler):
+    pymidi_handler = handler._create_handler()
+    studio, booth = peer("Studio Mac"), peer("Booth")
+
+    pymidi_handler.on_peer_connected(studio)
+    pymidi_handler.on_peer_connected(booth)
+    assert sorted(handler._peers) == ["Booth", "Studio Mac"]
+
+    pymidi_handler.on_peer_disconnected(studio)
+    assert list(handler._peers) == ["Booth"]
+
+
+@pymidi_only
+def test_disconnecting_an_unknown_peer_is_safe(handler):
+    pymidi_handler = handler._create_handler()
+    pymidi_handler.on_peer_disconnected(peer("Never connected"))
+    assert handler._peers == {}
+
+
+@pymidi_only
+def test_a_connected_peer_shows_up_in_the_status(handler):
+    pymidi_handler = handler._create_handler()
+    pymidi_handler.on_peer_connected(peer("Studio Mac", addr="10.0.0.9"))
+    handler._running = True
+
+    status = handler.get_status()
+    assert status["peer_count"] == 1
+    assert status["peers"] == [{"name": "Studio Mac", "address": "10.0.0.9"}]
+
+
+@pymidi_only
+def test_incoming_commands_are_dispatched(handler):
+    pymidi_handler = handler._create_handler()
+    sender = peer("Studio Mac")
+
+    pymidi_handler.on_midi_commands(sender, [
+        command("note_on", channel=0, key=60, velocity=100),
+        command("control_change", channel=1, control=7, value=64),
+    ])
+
+    assert [t for t, _ in handler.received] == ["note_on", "control_change"]
+    assert handler.received[0][1]["note"] == 60
+    assert handler.received[1][1]["value"] == 64
+    assert handler._messages_received == 2
+
+
+@pymidi_only
+def test_an_empty_command_list_dispatches_nothing(handler):
+    pymidi_handler = handler._create_handler()
+    pymidi_handler.on_midi_commands(peer(), [])
+    assert handler.received == []
+
+
+@pymidi_only
+def test_peers_without_a_name_are_keyed_by_repr(handler):
+    import types
+
+    pymidi_handler = handler._create_handler()
+    anonymous = types.SimpleNamespace()
+    pymidi_handler.on_peer_connected(anonymous)
+
+    assert list(handler._peers) == [str(anonymous)]
+
+
+@pymidi_only
+def test_a_connected_peer_can_be_sent_to(handler):
+    delivered = []
+    pymidi_handler = handler._create_handler()
+    pymidi_handler.on_peer_connected(peer("Studio Mac", sender=delivered.append))
+    handler._running = True
+
+    assert handler.send_to_all(b"\x90\x3c\x7f") == 1
+    assert delivered == [b"\x90\x3c\x7f"]
