@@ -15,6 +15,18 @@ from .midi_handler import MIDIHandler, midi_to_dmx, dmx_to_midi
 logger = logging.getLogger(__name__)
 
 
+def is_valid_write(channel: int, value: int) -> bool:
+    """Whether a (channel, value) pair is addressable DMX.
+
+    DMXUniverse silently ignores out-of-range writes; the interface checks the
+    same bounds up front so that its own bookkeeping (local values, blackout
+    staging) never indexes outside the 512-channel frame. Untrusted callers -
+    notably the WebSocket API - reach set_channel*() directly.
+    """
+    return isinstance(channel, int) and isinstance(value, int) \
+        and 1 <= channel <= 512 and 0 <= value <= 255
+
+
 class DMXUniverse:
     """Represents a single DMX universe with 512 channels."""
 
@@ -974,6 +986,11 @@ class DMXInterface:
             source: Source of the change - "local", "input", "group", or "user_<client_id>"
             _from_group: Internal flag to prevent group recursion
         """
+        if not is_valid_write(channel, value):
+            logger.debug(f"Ignoring out-of-range write: universe {universe_id}, "
+                         f"channel {channel}, value {value}")
+            return
+
         if self._blackout_active:
             # Store the value but don't output it
             if universe_id in self.universes:
@@ -1012,9 +1029,17 @@ class DMXInterface:
                     self._apply_group(group_id, value)
 
     def set_channels(self, universe_id: int, values: Dict[int, int], source: str = "local") -> None:
-        """Set multiple channel values at once."""
+        """Set multiple channel values at once.
+
+        Out-of-range channels/values are dropped rather than raising, matching
+        the single-channel setter.
+        """
         universe = self.get_universe(universe_id)
         if not universe:
+            return
+
+        values = {ch: val for ch, val in values.items() if is_valid_write(ch, val)}
+        if not values:
             return
 
         # Notify for parked channels (snap fader back) then filter them out
@@ -1131,9 +1156,10 @@ class DMXInterface:
         """Set multiple channel values without triggering callbacks (for fades)."""
         universe = self.get_universe(universe_id)
         if universe:
-            # Filter out parked channels (they ignore all input)
+            # Drop out-of-range writes and parked channels (which ignore input)
             values = {ch: val for ch, val in values.items()
-                      if not self.is_channel_parked(universe_id, ch)}
+                      if is_valid_write(ch, val)
+                      and not self.is_channel_parked(universe_id, ch)}
             if not values:
                 return
 
@@ -1987,11 +2013,16 @@ class DMXInterface:
             logger.info(f"MIDI input started: {device_name or 'default'}")
         return success
 
-    async def stop_midi_input(self) -> None:
-        """Stop MIDI input."""
+    async def stop_midi_input(self, device_name: Optional[str] = None) -> None:
+        """Stop MIDI input.
+
+        Args:
+            device_name: Specific device to disconnect. If None, stops all
+                         connected input devices.
+        """
         if self._midi_handler:
-            await self._midi_handler.stop_input()
-            logger.info("MIDI input stopped")
+            await self._midi_handler.stop_input(device_name)
+            logger.info(f"MIDI input stopped: {device_name or 'all devices'}")
 
     async def start_midi_output(self, device_name: Optional[str] = None) -> bool:
         """Start MIDI output.

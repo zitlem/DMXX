@@ -604,3 +604,60 @@ def test_on_midi_input_received_without_integration_only_broadcasts(dmx1, events
 
     assert [d for kind, d in events if kind == "midi_input_received"]
     assert dmx1.get_channel(1, 1) == 0
+
+
+# ---------------------------------------------------------------------------
+# Per-device input disconnect (regression: the device name was dropped)
+# ---------------------------------------------------------------------------
+class RecordingHandler(FakeMIDIHandler):
+    def __init__(self):
+        super().__init__()
+        self.stopped = []
+
+    async def stop_input(self, device_name=None):
+        self.stopped.append(device_name)
+
+
+@pytest.mark.asyncio
+async def test_stop_midi_input_forwards_the_device_name(dmx):
+    handler = RecordingHandler()
+    dmx._midi_handler = handler
+
+    await dmx.stop_midi_input("Launchpad")
+    assert handler.stopped == ["Launchpad"]
+
+
+@pytest.mark.asyncio
+async def test_stop_midi_input_without_a_device_stops_everything(dmx):
+    handler = RecordingHandler()
+    dmx._midi_handler = handler
+
+    await dmx.stop_midi_input()
+    assert handler.stopped == [None]
+
+
+@pytest.mark.asyncio
+async def test_stop_midi_input_without_a_handler_is_safe(dmx):
+    await dmx.stop_midi_input("Launchpad")
+
+
+@pytest.mark.asyncio
+async def test_only_the_named_device_is_disconnected():
+    """End to end against the real MIDIHandler bookkeeping."""
+    from backend.dmx_interface import DMXInterface
+    from backend.midi_handler import MIDIHandler
+
+    class FakePort:
+        def close(self):
+            pass
+
+    dmx = DMXInterface()
+    handler = MIDIHandler()
+    handler._input_ports = {"APC": FakePort(), "Launchpad": FakePort()}
+    dmx._midi_handler = handler
+
+    await dmx.stop_midi_input("APC")
+    assert list(handler._input_ports) == ["Launchpad"]
+
+    await dmx.stop_midi_input()
+    assert handler._input_ports == {}

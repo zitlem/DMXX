@@ -405,3 +405,47 @@ def test_lifespan_starts_configured_inputs(lifespan_client, db_session,
         config = interface._passthrough_config[1]
         assert config["passthrough_mode"] == "faders_output"
         assert (config["channel_start"], config["channel_end"]) == (5, 20)
+
+
+# ---------------------------------------------------------------------------
+# Malformed WebSocket writes (regression: these used to raise IndexError inside
+# the handler, which the broad except caught by dropping the connection)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("channel", [0, 513, -5, 99999])
+def test_out_of_range_channel_does_not_drop_the_connection(client, interface,
+                                                           channel):
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "set_channel", "universe_id": 1,
+                      "channel": channel, "value": 200})
+
+        # The socket must still be usable afterwards
+        ws.send_json({"type": "get_values", "universe_id": 1})
+        message = ws.receive_json()
+
+    assert message["type"] == "values"
+    assert message["data"]["values"] == [0] * 512
+
+
+def test_out_of_range_bulk_write_keeps_the_valid_channels(client, interface):
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "set_channels", "universe_id": 1,
+                      "values": {"1": 10, "513": 200, "0": 30}})
+        ws.send_json({"type": "get_values", "universe_id": 1})
+        values = ws.receive_json()["data"]["values"]
+
+    assert values[0] == 10
+    assert values[511] == 0   # channel 0 must not wrap onto channel 512
+    assert sum(values) == 10
+
+
+def test_out_of_range_value_does_not_drop_the_connection(client, interface):
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "set_channel", "universe_id": 1,
+                      "channel": 1, "value": 9999})
+        ws.send_json({"type": "get_values", "universe_id": 1})
+        values = ws.receive_json()["data"]["values"]
+
+    assert values[0] == 0

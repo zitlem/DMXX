@@ -67,6 +67,18 @@ fixed:
   `target_type` / `target_universe_id` but never wrote them, silently leaving a
   `channel` member with null universe and channel. Guarded by
   `test_update_can_convert_a_member_to_*`.
+- **Broken per-device MIDI disconnect.** `DMXInterface.stop_midi_input()` took
+  no arguments while the router passed a device name, so
+  `POST /api/midi/input/disconnect` returned 500 every time. Guarded by
+  `test_stop_midi_input_forwards_the_device_name` and
+  `test_disconnect_a_named_device`.
+- **Out-of-range channel writes.** `set_channel*()` updated their local-value
+  bookkeeping before any bounds check, so channel 513 raised `IndexError` and
+  channel 0 wrote onto channel 512. The REST API validated first, but the
+  WebSocket API did not, so a malformed message dropped the client's socket.
+  All three setters now ignore invalid writes (matching `DMXUniverse`).
+  Guarded in `test_dmx_interface_channels.py` and, end to end, by
+  `test_out_of_range_*` in `test_main.py`.
 
 - **Position off-by-one.** `max(position) or -1` treated an existing max
   position of `0` as "no rows", so the second row created also landed on

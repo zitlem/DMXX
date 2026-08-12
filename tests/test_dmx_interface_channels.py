@@ -407,3 +407,84 @@ async def test_disconnect_stops_inputs_and_outputs():
 
     assert interface.inputs == {}
     assert output.running is False
+
+
+# ---------------------------------------------------------------------------
+# Out-of-range writes (regression: these used to raise IndexError, and the
+# WebSocket API reaches these methods without validating first)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("channel", [0, -1, 513, 1000])
+def test_set_channel_ignores_out_of_range_channels(dmx1, channel):
+    dmx1.set_channel(1, channel, 200, source="user_x")
+    assert dmx1.get_all_values(1) == [0] * 512
+    assert dmx1.get_local_values(1) == [0] * 512
+
+
+@pytest.mark.parametrize("value", [-1, 256, 999])
+def test_set_channel_ignores_out_of_range_values(dmx1, value):
+    dmx1.set_channel(1, 1, value, source="user_x")
+    assert dmx1.get_channel(1, 1) == 0
+    assert dmx1.get_local_values(1)[0] == 0
+
+
+def test_channel_zero_does_not_corrupt_the_last_channel(dmx1):
+    """channel - 1 == -1 used to wrap around onto channel 512."""
+    dmx1.set_channel(1, 512, 99, source="user_x")
+    dmx1.set_channel(1, 0, 77, source="user_x")
+
+    assert dmx1.get_local_values(1)[511] == 99
+    assert dmx1.get_channel(1, 512) == 99
+
+
+def test_out_of_range_writes_emit_no_callbacks(dmx1, events):
+    dmx1.set_channel(1, 513, 200)
+    dmx1.set_channel(1, 1, 300)
+    assert events == []
+
+
+@pytest.mark.parametrize("channel", [0, 513])
+def test_set_channels_drops_out_of_range_channels(dmx1, channel):
+    dmx1.set_channels(1, {channel: 200, 5: 50}, source="user_x")
+
+    assert dmx1.get_channel(1, 5) == 50
+    assert dmx1.get_all_values(1).count(50) == 1
+
+
+def test_set_channels_drops_out_of_range_values(dmx1):
+    dmx1.set_channels(1, {1: 999, 2: 20}, source="user_x")
+
+    assert dmx1.get_channel(1, 1) == 0
+    assert dmx1.get_channel(1, 2) == 20
+
+
+def test_set_channels_with_only_bad_entries_is_a_noop(dmx1, events):
+    dmx1.set_channels(1, {513: 10, 0: 20}, source="user_x")
+    assert events == []
+    assert dmx1.get_all_values(1) == [0] * 512
+
+
+@pytest.mark.parametrize("channel", [0, 513])
+def test_set_channels_silent_drops_out_of_range_channels(dmx1, channel):
+    dmx1.set_channels_silent(1, {channel: 200, 5: 50})
+    assert dmx1.get_channel(1, 5) == 50
+
+
+def test_out_of_range_writes_during_blackout_are_ignored(dmx1):
+    """The blackout staging buffer is indexed too, so it needs the same guard."""
+    dmx1.blackout()
+
+    dmx1.set_channel(1, 513, 200)
+    dmx1.set_channels(1, {513: 200})
+    dmx1.set_channels_silent(1, {513: 200})
+
+    dmx1.release_blackout()
+    assert dmx1.get_all_values(1) == [0] * 512
+
+
+def test_valid_boundary_channels_still_work(dmx1):
+    dmx1.set_channel(1, 1, 0, source="user_x")
+    dmx1.set_channel(1, 512, 255, source="user_x")
+
+    assert dmx1.get_channel(1, 1) == 0
+    assert dmx1.get_channel(1, 512) == 255
+    assert dmx1.get_local_values(1)[511] == 255

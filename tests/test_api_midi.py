@@ -444,3 +444,35 @@ def test_feedback_toggle(client, interface):
     assert client.post("/api/midi/output/feedback/disable").json() == {
         "status": "disabled"}
     assert interface._midi_output_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Per-device disconnect (regression: this endpoint always returned 500)
+# ---------------------------------------------------------------------------
+def test_disconnect_a_named_device(client, interface):
+    stopped = []
+
+    class Handler:
+        _output_port = None
+
+        async def stop_input(self, device_name=None):
+            stopped.append(device_name)
+
+    interface._midi_handler = Handler()
+
+    response = client.post("/api/midi/input/disconnect",
+                           json={"device_name": "Launchpad"})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "disconnected", "device": "Launchpad"}
+    assert stopped == ["Launchpad"]
+
+
+def test_disconnect_without_a_handler_still_succeeds(client, interface):
+    response = client.post("/api/midi/input/disconnect",
+                           json={"device_name": "Ghost"})
+    assert response.status_code == 200
+
+
+def test_disconnect_requires_a_device_name(client):
+    assert client.post("/api/midi/input/disconnect", json={}).status_code == 422
