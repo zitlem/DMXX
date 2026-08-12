@@ -138,7 +138,7 @@ async def create_grid(
         max_pos = -1
 
     grid = GroupGrid(
-        name=request.name,
+        name=request.name.strip(),
         color=request.color,
         position=max_pos + 1
     )
@@ -188,7 +188,7 @@ async def update_grid(
         raise HTTPException(status_code=404, detail="Grid not found")
 
     if request.name is not None:
-        grid.name = request.name
+        grid.name = request.name.strip()
 
     request_data = request.model_dump(exclude_unset=True)
     if 'color' in request_data:
@@ -295,7 +295,7 @@ async def create_group(
 
     # Create the group
     group = Group(
-        name=request.name,
+        name=request.name.strip(),
         mode=request.mode,
         master_universe=request.master_universe,
         master_channel=request.master_channel,
@@ -355,7 +355,7 @@ async def update_group(
         raise HTTPException(status_code=404, detail="Group not found")
 
     if request.name is not None:
-        group.name = request.name
+        group.name = request.name.strip()
     if request.mode is not None:
         group.mode = request.mode
     if request.enabled is not None:
