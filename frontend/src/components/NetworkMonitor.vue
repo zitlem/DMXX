@@ -285,6 +285,7 @@ import { ref, reactive, computed, onMounted, onUnmounted, onBeforeUnmount, watch
 import { onBeforeRouteLeave } from 'vue-router'
 import { useAuthStore } from '../stores/auth.js'
 import { useDmxStore } from '../stores/dmx.js'
+import { apiFetch } from '../lib/api.js'
 
 const authStore = useAuthStore()
 const dmxStore = useDmxStore()
@@ -341,12 +342,10 @@ function toggleBypass() {
   }
 }
 
+// Throws ApiError on a non-2xx response, so the catch blocks below actually
+// see server-side failures instead of treating them as success.
 async function fetchWithAuth(url, options = {}) {
-  options.headers = {
-    ...options.headers,
-    ...authStore.getAuthHeaders()
-  }
-  return fetch(url, options)
+  return apiFetch(url, options, authStore.getAuthHeaders())
 }
 
 async function loadStatus() {

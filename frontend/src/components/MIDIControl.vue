@@ -408,16 +408,15 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '../stores/auth.js'
+import { apiFetch } from '../lib/api.js'
 
 const authStore = useAuthStore()
 
 // Helper to fetch with auth
+// Throws ApiError on a non-2xx response, so the catch blocks below actually
+// see server-side failures instead of treating them as success.
 async function fetchWithAuth(url, options = {}) {
-  options.headers = {
-    ...options.headers,
-    ...authStore.getAuthHeaders()
-  }
-  return fetch(url, options)
+  return apiFetch(url, options, authStore.getAuthHeaders())
 }
 
 const devices = ref({ inputs: [], outputs: [] })
@@ -557,6 +556,7 @@ async function disconnectInput() {
     await loadStatus()
   } catch (e) {
     console.error('Failed to disconnect MIDI input:', e)
+    alert('Failed to disconnect MIDI input: ' + e.message)
   }
 }
 
@@ -581,6 +581,7 @@ async function disconnectOutput() {
     feedbackEnabled.value = false
   } catch (e) {
     console.error('Failed to disconnect MIDI output:', e)
+    alert('Failed to disconnect MIDI output: ' + e.message)
   }
 }
 
@@ -601,6 +602,7 @@ async function toggleFeedback() {
     feedbackEnabled.value = !feedbackEnabled.value
   } catch (e) {
     console.error('Failed to toggle feedback:', e)
+    alert('Failed to toggle feedback: ' + e.message)
   }
 }
 
@@ -645,6 +647,7 @@ async function disconnectDevice(deviceName) {
     await loadStatus()
   } catch (e) {
     console.error('Failed to disconnect device:', e)
+    alert('Failed to disconnect device: ' + e.message)
   }
 }
 
@@ -683,6 +686,7 @@ async function stopNetworkServer() {
     await loadNetworkStatus()
   } catch (e) {
     console.error('Failed to stop network MIDI server:', e)
+    alert('Failed to stop network MIDI server: ' + e.message)
   }
 }
 
@@ -707,6 +711,7 @@ async function toggleCCModalListen() {
     }
   } catch (e) {
     console.error('Failed to toggle CC modal listen:', e)
+    alert('Failed to toggle CC modal listen: ' + e.message)
   }
 }
 
@@ -723,6 +728,7 @@ async function toggleNoteModalListen() {
     }
   } catch (e) {
     console.error('Failed to toggle note modal listen:', e)
+    alert('Failed to toggle note modal listen: ' + e.message)
   }
 }
 
@@ -812,6 +818,7 @@ async function toggleCCMapping(m) {
     await loadCCMappings()
   } catch (e) {
     console.error('Failed to toggle CC mapping:', e)
+    alert('Failed to toggle CC mapping: ' + e.message)
   }
 }
 
@@ -822,6 +829,7 @@ async function deleteCCMapping(m) {
     await loadCCMappings()
   } catch (e) {
     console.error('Failed to delete CC mapping:', e)
+    alert('Failed to delete CC mapping: ' + e.message)
   }
 }
 
@@ -885,6 +893,7 @@ async function toggleTrigger(t) {
     await loadTriggers()
   } catch (e) {
     console.error('Failed to toggle trigger:', e)
+    alert('Failed to toggle trigger: ' + e.message)
   }
 }
 
@@ -895,6 +904,7 @@ async function deleteTrigger(t) {
     await loadTriggers()
   } catch (e) {
     console.error('Failed to delete trigger:', e)
+    alert('Failed to delete trigger: ' + e.message)
   }
 }
 

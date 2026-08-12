@@ -294,3 +294,59 @@ describe('authenticated requests', () => {
     expect(options.headers.Authorization).toBe('Bearer jwt-token')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Server-side failures
+//
+// fetch resolves for a 500, so before apiFetch these paths parsed an error
+// body as if it were a theme.
+// ---------------------------------------------------------------------------
+function stubErrorResponse(status = 500, body = { detail: 'boom' }) {
+  vi.stubGlobal('fetch', vi.fn(async () => ({
+    ok: false,
+    status,
+    json: async () => body,
+    clone() { return this }
+  })))
+}
+
+describe('error responses', () => {
+  it('loadTheme falls back to the defaults on a 500', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubErrorResponse()
+    const theme = useThemeStore()
+
+    await theme.loadTheme()
+
+    expect(theme.loaded).toBe(true)
+    expect(theme.themeData.presetName).toBe('dark')
+    expect(cssVar('--bg-primary')).toBe('#1a1a2e')
+  })
+
+  it('loadPresets keeps the presets empty on a 500', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubErrorResponse()
+    const theme = useThemeStore()
+
+    await theme.loadPresets()
+
+    expect(theme.presets).toEqual({})
+  })
+
+  it('a rejected save leaves the theme marked as unsaved', async () => {
+    stubFetch(() => ({ value: JSON.stringify({
+      type: 'preset', presetName: 'dark', colors: { accent: '#e94560' }
+    }) }))
+    const theme = useThemeStore()
+    await theme.loadTheme()
+    theme.setCustomColor('accent', '#00ff00')
+    expect(theme.hasUnsavedChanges).toBe(true)
+
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    stubErrorResponse(403, { detail: 'Permission denied' })
+    await theme.saveTheme()
+
+    // The change was not persisted, so it must still show as unsaved
+    expect(theme.hasUnsavedChanges).toBe(true)
+  })
+})

@@ -25,6 +25,7 @@ npm run test:coverage # with a coverage table
 | `router.test.js` | the route table: permissions, names, duplicates |
 | `router.guard.test.js` | `router.beforeEach` - the authorization gate |
 | `groupText.test.js` | the group text format: serialise, parse, diff, percent/raw conversion |
+| `api.test.js` | the shared fetch wrapper that turns a non-2xx response into a thrown error |
 
 ## Conventions
 

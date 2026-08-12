@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useAuthStore } from './auth.js'
+import { apiFetch } from '../lib/api.js'
 
 // Default dark theme colors
 const DARK_THEME = {
@@ -38,13 +39,11 @@ export const useThemeStore = defineStore('theme', () => {
     return JSON.stringify(themeData.value) !== JSON.stringify(savedThemeData.value)
   })
 
+  // Throws ApiError on a non-2xx response so the callers below fall back to
+  // the default theme instead of trying to parse an error body.
   async function fetchWithAuth(url, options = {}) {
     const authStore = useAuthStore()
-    options.headers = {
-      ...options.headers,
-      ...authStore.getAuthHeaders()
-    }
-    return fetch(url, options)
+    return apiFetch(url, options, authStore.getAuthHeaders())
   }
 
   async function loadTheme() {
