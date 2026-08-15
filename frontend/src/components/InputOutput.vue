@@ -745,21 +745,6 @@ async function updateInput(universeId, inputType) {
   }
 }
 
-async function updateOutput(universeId, deviceType) {
-  try {
-    await fetchWithAuth(`/api/io/${universeId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        device_type: deviceType
-      })
-    })
-    await loadIOConfig()
-  } catch (e) {
-    console.error('Failed to update output:', e)
-  }
-}
-
 async function toggleInput(universeId, enabled) {
   try {
     const endpoint = enabled ? 'enable' : 'disable'
@@ -795,19 +780,6 @@ async function updateChannelRange(universeId, start, end) {
   }
 }
 
-async function toggleOutput(universeId, enabled) {
-  try {
-    await fetchWithAuth(`/api/io/${universeId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled })
-    })
-    await loadIOConfig()
-  } catch (e) {
-    console.error('Failed to toggle output:', e)
-  }
-}
-
 async function updatePassthroughMode(universeId, passthroughMode, mergeMode = 'htp') {
   try {
     await fetchWithAuth(`/api/io/${universeId}/passthrough`, {
@@ -822,17 +794,6 @@ async function updatePassthroughMode(universeId, passthroughMode, mergeMode = 'h
   } catch (e) {
     console.error('Failed to update passthrough:', e)
   }
-}
-
-// Legacy function for backwards compatibility
-async function updatePassthrough(universeId, enabled, mode, showUi = false) {
-  // Convert old format to new
-  let passthroughMode = 'off'
-  if (enabled && showUi) passthroughMode = 'faders_output'
-  else if (enabled && !showUi) passthroughMode = 'output_only'
-  else if (!enabled && showUi) passthroughMode = 'view_only'
-
-  await updatePassthroughMode(universeId, passthroughMode, mode)
 }
 
 async function loadLoopbackHelp() {
@@ -881,13 +842,6 @@ function configureInput(universe) {
   if (universe.input.input_type === 'midi_input') {
     loadMidiDevices()
   }
-}
-
-function configureOutput(universe) {
-  // Legacy - configures first output
-  const output = universe.outputs[0] || universe.output
-  showOutputConfig.value = { universe, output }
-  outputConfigForm.value = { ...output.config }
 }
 
 function configureOutputItem(universe, output) {

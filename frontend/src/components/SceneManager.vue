@@ -1231,56 +1231,6 @@ async function editSceneValues(scene) {
   }
 }
 
-function addValue() {
-  editValuesForm.value.push({
-    universe_id: universes.value[0]?.id || 1,
-    channel: 1,
-    value: 255
-  })
-}
-
-function removeValue(idx) {
-  editValuesForm.value.splice(idx, 1)
-}
-
-function executeBulk() {
-  const start = Math.min(bulkStart.value, bulkEnd.value)
-  const end = Math.max(bulkStart.value, bulkEnd.value)
-  const universeId = bulkUniverse.value
-
-  if (bulkMode.value === 'add') {
-    const value = bulkValue.value ?? 255
-
-    for (let ch = start; ch <= end; ch++) {
-      if (!editValuesForm.value.find(v => v.channel === ch && v.universe_id === universeId)) {
-        editValuesForm.value.push({
-          universe_id: universeId,
-          channel: ch,
-          value: value
-        })
-      }
-    }
-    editValuesForm.value.sort((a, b) => a.universe_id - b.universe_id || a.channel - b.channel)
-  } else {
-    // Filter by selected universe for delete
-    const count = editValuesForm.value.filter(
-      v => v.universe_id === universeId && v.channel >= start && v.channel <= end
-    ).length
-    if (count === 0) {
-      alert(`No channels found in range ${start}-${end} for ${getUniverseLabel(universeId)}`)
-      return
-    }
-    if (confirm(`Delete ${count} channel(s) in range ${start}-${end} from ${getUniverseLabel(universeId)}?`)) {
-      editValuesForm.value = editValuesForm.value.filter(
-        v => v.universe_id !== universeId || v.channel < start || v.channel > end
-      )
-    }
-  }
-
-  bulkStart.value = null
-  bulkEnd.value = null
-}
-
 async function saveSceneValues() {
   try {
     // Clamp values to valid DMX range

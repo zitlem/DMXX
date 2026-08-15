@@ -51,10 +51,3 @@ export async function apiFetch(url, options = {}, headers = {}) {
   }
   return response
 }
-
-/** apiFetch, decoded as JSON. */
-export async function apiJson(url, options = {}, headers = {}) {
-  const response = await apiFetch(url, options, headers)
-  if (response.status === 204) return null
-  return response.json()
-}

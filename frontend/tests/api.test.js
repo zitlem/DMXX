@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { apiFetch, apiJson, ApiError } from '../src/lib/api.js'
+import { apiFetch, ApiError } from '../src/lib/api.js'
 
 function stubFetch(response) {
   const spy = vi.fn(async () => response)
@@ -95,26 +95,5 @@ describe('apiFetch', () => {
 
     const result = await apiFetch('/api/x')
     await expect(result.json()).resolves.toEqual({ id: 1 })
-  })
-})
-
-describe('apiJson', () => {
-  it('decodes a successful response', async () => {
-    stubFetch(jsonResponse({ id: 7, name: 'Warm' }))
-
-    await expect(apiJson('/api/groups/7')).resolves.toEqual({ id: 7, name: 'Warm' })
-  })
-
-  it('returns null for 204 No Content', async () => {
-    stubFetch({ ok: true, status: 204, json: async () => { throw new Error('no body') },
-                clone() { return this } })
-
-    await expect(apiJson('/api/x', { method: 'DELETE' })).resolves.toBeNull()
-  })
-
-  it('throws on an error response rather than returning the body', async () => {
-    stubFetch(jsonResponse({ detail: 'Permission denied' }, { ok: false, status: 403 }))
-
-    await expect(apiJson('/api/x')).rejects.toThrow('Permission denied')
   })
 })

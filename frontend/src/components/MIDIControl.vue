@@ -533,33 +533,6 @@ async function loadTriggers() {
   }
 }
 
-async function connectInput() {
-  try {
-    await fetchWithAuth('/api/midi/input/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device_name: selectedInputDevice.value })
-    })
-    // Enable MIDI input integration
-    await fetchWithAuth('/api/midi/input/enable', { method: 'POST' })
-    await loadStatus()
-  } catch (e) {
-    console.error('Failed to connect MIDI input:', e)
-    alert('Failed to connect MIDI input')
-  }
-}
-
-async function disconnectInput() {
-  try {
-    await fetchWithAuth('/api/midi/input/stop', { method: 'POST' })
-    await fetchWithAuth('/api/midi/input/disable', { method: 'POST' })
-    await loadStatus()
-  } catch (e) {
-    console.error('Failed to disconnect MIDI input:', e)
-    alert('Failed to disconnect MIDI input: ' + e.message)
-  }
-}
-
 async function connectOutput() {
   try {
     await fetchWithAuth('/api/midi/output/start', {

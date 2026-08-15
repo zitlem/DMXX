@@ -800,23 +800,6 @@ function getFader1Value(universeId, channel) {
   return getOutputValue(universeId, channel)
 }
 
-// Get the DMX value for FADERS2 display - uses computed for reactivity
-function getFader2Value(universeId, channel) {
-  return fader2Values.value[universeId]?.[channel - 1] || 0
-}
-
-// Check if channel is connected to a group (master or member)
-function isGroupChannel(universeId, channel) {
-  return activeGroups.value.some(group => {
-    // Check if this is the master channel
-    if (group.masterUniverse === universeId && group.masterChannel === channel) {
-      return true
-    }
-    // Check if this is a member channel
-    return group.members.some(m => m.universe_id === universeId && m.channel === channel)
-  })
-}
-
 // Check if channel should show DMX value in FADERS1
 function shouldShowFaderValue(universeId, channel) {
   // Check if this channel is within a passthrough input range
@@ -862,19 +845,6 @@ function getGroupMasterValue(group) {
     }
   }
   return 0
-}
-
-// Get fader name for a channel
-function getFaderName(universeId, channel) {
-  // Look up fader in faderUniverses
-  const universe = faderUniverses.value.find(u => u.id === universeId)
-  if (universe) {
-    const fader = universe.faders.find(f => f.channel === channel)
-    if (fader) {
-      return fader.name
-    }
-  }
-  return `Ch ${channel}`
 }
 
 // Generate channel array
@@ -1342,11 +1312,6 @@ watch([inputUniverses, mappingUniverses, mappingConfig, activeGroups, faderUnive
 // Format helpers
 function formatInputType(type) {
   const types = { 'artnet_input': 'Art-Net', 'sacn_input': 'sACN', 'none': 'None' }
-  return types[type] || type
-}
-
-function formatOutputType(type) {
-  const types = { 'artnet': 'Art-Net', 'sacn': 'sACN', 'mock': 'Mock', 'dummy': 'Dummy' }
   return types[type] || type
 }
 

@@ -942,7 +942,8 @@ import { useDmxStore } from '../stores/dmx.js'
 import { hslToRgb, rgbToHsl } from '../lib/color.js'
 import {
   rawToPercent, percentToRaw, normName,
-  serializeGroups, parseGroupText, convertDocumentValues, diffGroups
+  serializeGroups, parseGroupText, convertDocumentValues, diffGroups,
+  summariseDiff
 } from '../lib/groupText.js'
 import { useAuthStore } from '../stores/auth.js'
 import { wsManager } from '../websocket.js'
@@ -1949,14 +1950,12 @@ async function previewTextEditorChanges() {
   const parts = []
   if (groupsReordered) parts.push('groups reordered')
   if (membersReordered) parts.push('members reordered')
-  if (newGrids.size > 0) parts.push(`${newGrids.size} new grid(s)`)
-  if (newGroups.size > 0) parts.push(`${newGroups.size} new group(s)`)
-  if (toAdd.length > 0) parts.push(`${toAdd.length} member(s) to add`)
-  if (toUpdate.length > 0) parts.push(`${toUpdate.length} member(s) to update`)
-  if (toDelete.length > 0) parts.push(`${toDelete.length} member(s) to delete`)
-  if (groupsToDelete.length > 0) parts.push(`${groupsToDelete.length} group(s) to delete`)
-  if (gridsToDelete.length > 0) parts.push(`${gridsToDelete.length} grid(s) to delete`)
-  if (toUpdateLabels.length > 0) parts.push(`${toUpdateLabels.length} label(s) to update`)
+  // Everything except the reorder flags comes from the tested summariser
+  const changes = summariseDiff({
+    toAdd, toUpdate, toDelete, toUpdateLabels,
+    newGrids, newGroups, groupsToDelete, gridsToDelete
+  })
+  if (changes) parts.push(changes)
 
   if (parts.length === 0) {
     textEditorSummary.value = 'No changes detected.'
@@ -2772,60 +2771,6 @@ function initAllColorMixerStates() {
       }
     }
   }
-}
-
-function startColorPick(event, group) {
-  event.preventDefault()
-  initColorPickerState(group.id)
-  colorPickingGroup.value = group
-
-  const target = event.currentTarget
-  handleColorPick(event, group, target)
-
-  const moveHandler = (e) => handleColorPick(e, group, target)
-  const stopHandler = () => {
-    document.removeEventListener('mousemove', moveHandler)
-    document.removeEventListener('mouseup', stopHandler)
-    document.removeEventListener('touchmove', moveHandler)
-    document.removeEventListener('touchend', stopHandler)
-    colorPickingGroup.value = null
-  }
-
-  document.addEventListener('mousemove', moveHandler)
-  document.addEventListener('mouseup', stopHandler)
-  document.addEventListener('touchmove', moveHandler)
-  document.addEventListener('touchend', stopHandler)
-}
-
-function handleColorPick(event, group, target) {
-  if (!target) return
-
-  const rect = target.getBoundingClientRect()
-  const clientX = event.touches ? event.touches[0].clientX : event.clientX
-  const clientY = event.touches ? event.touches[0].clientY : event.clientY
-
-  let x = (clientX - rect.left) / rect.width * 100
-  let y = (clientY - rect.top) / rect.height * 100
-
-  // Clamp values
-  x = Math.max(0, Math.min(100, x))
-  y = Math.max(0, Math.min(100, y))
-
-  // x = saturation in HSV, y inverted = value in HSV
-  const sv = x
-  const v = 100 - y
-  const { s, l } = hsvToHsl(colorPickerState[group.id].h, sv, v)
-
-  colorPickerState[group.id].s = s
-  colorPickerState[group.id].l = l
-
-  applyColorToGroup(group)
-}
-
-function updateGroupHue(group, hue) {
-  initColorPickerState(group.id)
-  colorPickerState[group.id].h = parseInt(hue)
-  applyColorToGroup(group)
 }
 
 // Debounce timers for color sync to backend
