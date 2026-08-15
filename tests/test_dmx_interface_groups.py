@@ -631,3 +631,46 @@ def test_get_member_base_value_defaults_to_full(dmx1):
     grp = group(1, members=[member(channel=1, base_value=77)])
     assert dmx1._get_member_base_value(grp, 1, 1) == 77
     assert dmx1._get_member_base_value(grp, 1, 2) == 255
+
+
+# ---------------------------------------------------------------------------
+# Cross-language colour contract
+#
+# frontend/src/lib/color.js mirrors _hsl_to_rgb so the colour picker shows the
+# RGB the fixtures actually receive. Both sides are asserted against this
+# fixture, so changing one implementation alone fails a suite.
+# ---------------------------------------------------------------------------
+import json
+import os
+
+HSL_REFERENCE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "fixtures", "hsl_reference.json")
+
+
+def load_reference():
+    with open(HSL_REFERENCE) as handle:
+        return json.load(handle)["samples"]
+
+
+def test_the_reference_fixture_has_samples():
+    assert len(load_reference()) > 500
+
+
+def test_hsl_to_rgb_matches_the_reference(dmx):
+    mismatches = [
+        s for s in load_reference()
+        if dmx._hsl_to_rgb(s["h"], s["s"], s["l"]) != (s["r"], s["g"], s["b"])
+    ]
+    assert mismatches == []
+
+
+def test_the_reference_covers_the_hue_circle():
+    hues = {s["h"] for s in load_reference()}
+    assert 0 in hues and 360 in hues
+    assert len(hues) > 20
+
+
+def test_the_reference_covers_the_saturation_and_lightness_extremes():
+    samples = load_reference()
+    assert {s["s"] for s in samples} >= {0, 100}
+    assert {s["l"] for s in samples} >= {0, 100}

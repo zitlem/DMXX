@@ -26,6 +26,7 @@ npm run test:coverage # with a coverage table
 | `router.guard.test.js` | `router.beforeEach` - the authorization gate |
 | `groupText.test.js` | the group text format: serialise, parse, diff, percent/raw conversion |
 | `api.test.js` | the shared fetch wrapper that turns a non-2xx response into a thrown error |
+| `color.test.js` | HSL/RGB conversion, pinned to the backend via a shared reference fixture |
 
 ## Conventions
 
@@ -60,6 +61,9 @@ Two constants are duplicated between this app and the Python backend. Both are
 guarded from the **backend** suite, which parses these files and compares:
 
 - `src/config/pages.js` ↔ `backend/config.py` (`test_config.py`)
+- `src/lib/color.js` ↔ `DMXInterface._hsl_to_rgb`, via
+  `tests/fixtures/hsl_reference.json`, which both suites assert against
+  (`color.test.js` and `test_dmx_interface_groups.py`)
 - the `DARK_THEME` palette in `src/stores/theme.js` ↔ `THEME_PRESETS["dark"]`
   in `backend/api/settings.py` (`test_api_settings.py`)
 
